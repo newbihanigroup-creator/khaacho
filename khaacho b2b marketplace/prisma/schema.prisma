@@ -54,6 +54,8 @@ enum CreditStatus {
   BLOCKED
   REVIEW
 }
+
+enum PaymentMethod {
   CASH
   BANK_TRANSFER
   MOBILE_MONEY
@@ -129,7 +131,7 @@ model VendorRanking {
   updatedAt         DateTime  @map("updated_at") @updatedAt
 
   @@unique([vendorId])
-  @@index([vendorScore, sortOrder: Desc])
+  @@index([vendorScore])
   @@index([rank])
   @@index([lastUpdated])
   @@map("vendor_rankings")
