@@ -1,12 +1,14 @@
 services:
-  # Web Service - API Server
+  # ============================================================================
+  # 1. WEB SERVICE - API Server (Handles HTTP requests only)
+  # ============================================================================
   - type: web
     name: khaacho-api
     env: node
     region: oregon
     plan: starter
     buildCommand: npm install && npx prisma generate
-    startCommand: npm start
+    startCommand: npm run start:web
     healthCheckPath: /api/health
     envVars:
       - key: NODE_ENV
@@ -18,6 +20,11 @@ services:
       - key: DATABASE_URL
         fromDatabase:
           name: khaacho-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          type: redis
+          name: khaacho-redis
           property: connectionString
       - key: JWT_SECRET
         generateValue: true
@@ -46,6 +53,54 @@ services:
       - key: ASYNC_NOTIFICATIONS
         value: true
 
+  # ============================================================================
+  # 2. WORKER SERVICE - Background Jobs (CRITICAL FOR SCALE)
+  # ============================================================================
+  - type: worker
+    name: khaacho-worker
+    env: node
+    region: oregon
+    plan: starter
+    buildCommand: npm install && npx prisma generate
+    startCommand: npm run start:worker
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: API_VERSION
+        value: v1
+      - key: DATABASE_URL
+        fromDatabase:
+          name: khaacho-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          type: redis
+          name: khaacho-redis
+          property: connectionString
+      - key: JWT_SECRET
+        generateValue: true
+      - key: WHATSAPP_API_URL
+        sync: false
+      - key: WHATSAPP_PHONE_NUMBER_ID
+        sync: false
+      - key: WHATSAPP_ACCESS_TOKEN
+        sync: false
+      - key: WHATSAPP_VERIFY_TOKEN
+        sync: false
+      - key: WHATSAPP_ASYNC
+        value: true
+      - key: LOG_LEVEL
+        value: info
+      - key: ENABLE_METRICS
+        value: true
+      - key: ENABLE_BACKGROUND_JOBS
+        value: true
+      - key: HEALTH_PORT
+        value: 10001
+
+# ============================================================================
+# 3. POSTGRESQL DATABASE - Managed Database
+# ============================================================================
 databases:
   - name: khaacho-db
     databaseName: khaacho
@@ -53,3 +108,13 @@ databases:
     plan: starter
     region: oregon
     postgresMajorVersion: 15
+
+# ============================================================================
+# 4. REDIS - Queue + Cache (CRITICAL FOR SCALE)
+# ============================================================================
+# Note: Redis must be added manually in Render Dashboard
+# Go to Dashboard → New → Redis
+# Name: khaacho-redis
+# Plan: Starter ($10/month)
+# Region: Oregon
+# After creation, it will auto-link to services above
