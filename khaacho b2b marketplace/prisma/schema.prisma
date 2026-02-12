@@ -358,7 +358,7 @@ model Order {
   productId          String? @map("product_id")
   product           Product?      @relation(fields: [productId], references: [id], onDelete: Cascade)
   vendorPrice       Decimal       @map("vendor_price") @db.Decimal(12, 2)
-  status            OrderStatus   @default(DRAFT)
+  status            OrderStatus   @default(PLACED)
   paymentStatus     PaymentStatus @map("payment_status") @default(PENDING)
   subtotal          Decimal       @db.Decimal(15, 2)
   discount          Decimal       @default(0) @db.Decimal(15, 2)
@@ -807,4 +807,53 @@ model VendorOrderAcceptance {
   @@index([orderId])
   @@index([status, responseDeadline])
   @@map("vendor_order_acceptances")
+}
+
+model Invoice {
+  id                String    @id @default(uuid())
+  invoiceNumber     String    @map("invoice_number") @unique
+  orderId           String    @map("order_id")
+  order             Order      @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  retailerId        String    @map("retailer_id")
+  retailer          Retailer   @relation(fields: [retailerId], references: [id], onDelete: Cascade)
+  totalAmount       Decimal   @map("total_amount") @db.Decimal(15, 2)
+  paidAmount        Decimal   @map("paid_amount") @default(0) @db.Decimal(15, 2)
+  dueAmount         Decimal   @map("due_amount") @db.Decimal(15, 2)
+  status            String    @default("DRAFT") // DRAFT, SENT, PAID, OVERDUE, CANCELLED
+  issueDate         DateTime  @map("issue_date") @default(now())
+  dueDate           DateTime  @map("due_date")
+  paidAt            DateTime? @map("paid_at")
+  createdBy         String    @map("created_by")
+  createdByUser     User       @relation("InvoiceCreatedBy", fields: [createdBy], references: [id], onDelete: Cascade)
+  createdAt         DateTime  @map("created_at") @default(now())
+  updatedAt         DateTime  @map("updated_at") @updatedAt
+
+  @@index([orderId])
+  @@index([retailerId])
+  @@index([status])
+  @@index([dueDate])
+  @@map("invoices")
+}
+
+model VendorSettlement {
+  id                String    @id @default(uuid())
+  settlementNumber  String    @map("settlement_number") @unique
+  vendorId          String    @map("vendor_id")
+  vendor            Vendor     @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+  totalOrders       Int        @map("total_orders")
+  totalAmount       Decimal    @map("total_amount") @db.Decimal(15, 2)
+  commissionAmount  Decimal    @map("commission_amount") @db.Decimal(15, 2)
+  settledAmount    Decimal    @map("settled_amount") @db.Decimal(15, 2)
+  status            String     @default("PENDING") // PENDING, PROCESSING, COMPLETED, FAILED
+  settlementDate    DateTime? @map("settlement_date")
+  notes             String?
+  createdBy         String     @map("created_by")
+  createdByUser     User       @relation("SettlementCreatedBy", fields: [createdBy], references: [id], onDelete: Cascade)
+  createdAt         DateTime   @map("created_at") @default(now())
+  updatedAt         DateTime   @map("updated_at") @updatedAt
+
+  @@index([vendorId])
+  @@index([status])
+  @@index([settlementDate])
+  @@map("vendor_settlements")
 }
