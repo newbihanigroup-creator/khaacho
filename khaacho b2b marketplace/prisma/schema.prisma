@@ -216,6 +216,8 @@ enum RiskLevel {
   HIGH
   BLOCKED
 }
+
+model Retailer {
   id                String    @id @default(uuid())
   userId            String    @map("user_id") @unique
   user              User      @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -315,6 +317,8 @@ enum InventoryStatus {
   LOW_STOCK
   DISCONTINUED
 }
+
+model VendorProduct {
   id              String    @id @default(uuid())
   vendorId        String @map("vendor_id")
   vendor          Vendor    @relation(fields: [vendorId], references: [id], onDelete: Cascade)
