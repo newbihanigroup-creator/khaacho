@@ -162,12 +162,11 @@ model Vendor {
 
   // Relations
   vendorProducts VendorProduct[]
-  vendorInventories VendorInventory[]
+  vendorStock     VendorInventory[]
   orders          Order[]
   creditLedgers   CreditLedger[]
   payments        Payment[]
   broadcastLogs   OrderBroadcastLog[]
-  inventories     VendorInventory[]
   rankings        VendorRanking[]
   settlements     VendorSettlement[]
 
@@ -284,7 +283,7 @@ model Product {
   // Relations
   vendorProducts VendorProduct[]
   orderItems     OrderItem[]
-  vendorInventories VendorInventory[]
+  vendorStock    VendorInventory[]
 
   @@index([productCode])
   @@index([category, subCategory])
@@ -296,9 +295,9 @@ model Product {
 model VendorInventory {
   id                String    @id @default(uuid())
   vendorId          String    @map("vendor_id")
-  vendor            Vendor    @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+  vendor            Vendor    @relation("VendorStock", fields: [vendorId], references: [id], onDelete: Cascade)
   productId          String    @map("product_id")
-  product           Product   @relation(fields: [productId], references: [id], onDelete: Cascade)
+  product           Product   @relation("ProductStock", fields: [productId], references: [id], onDelete: Cascade)
   price             Decimal   @db.Decimal(12, 2)
   availableQuantity  Int       @map("available_quantity")
   minStock          Int       @map("min_stock") @default(0)
