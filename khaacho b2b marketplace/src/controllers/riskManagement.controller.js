@@ -363,8 +363,7 @@ class RiskManagementController {
           averageRiskScore: profileHistory.reduce((sum, p) => sum + p.riskScore, 0) / profileHistory.length,
           currentScore: profile.riskScore,
           riskTrend: profileHistory.length > 1 ? 
-            (profileHistory[profileHistory.length - 1].riskScore - profileHistory[profileHistory.length - 1].riskScore) / (profileHistory[profileHistory.length - 1]) : 0
-          : 0
+            (profileHistory[profileHistory.length - 1].riskScore - profileHistory[0].riskScore) / profileHistory.length : 0
         }
       };
 
