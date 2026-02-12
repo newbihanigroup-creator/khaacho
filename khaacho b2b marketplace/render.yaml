@@ -2,12 +2,12 @@ services:
   # Web Service - API Server
   - type: web
     name: khaacho-api
-    env: node
+    env: docker
     region: oregon
     plan: starter
-    buildCommand: npm install && npm run build
-    startCommand: npm start
-    healthCheckPath: /api/v1/monitoring/health
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /api/health
     envVars:
       - key: NODE_ENV
         value: production
@@ -82,11 +82,12 @@ services:
   # Worker Service - Background Jobs
   - type: worker
     name: khaacho-worker
-    env: node
+    env: docker
     region: oregon
     plan: starter
-    buildCommand: npm install && npm run build
-    startCommand: npm run start:worker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    dockerCommand: node src/server-worker.js
     envVars:
       - key: NODE_ENV
         value: production
