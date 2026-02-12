@@ -37,7 +37,7 @@ class VendorIntelligenceService {
         priceScore * 0.3 +      // 30% weight
         acceptanceScore * 0.25 +   // 25% weight
         completionScore * 0.25 +   // 25% weight
-        deliveryScore * 0.2       // 20% weight
+        deliveryScore * 0.2 +      // 20% weight
         50 // Base score for all vendors
       );
 
