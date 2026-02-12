@@ -12,6 +12,7 @@ const vendorIntelligenceRoutes = require('./vendorIntelligence.routes');
 const financialAccountingRoutes = require('./financialAccounting.routes');
 const riskManagementRoutes = require('./riskManagement.routes');
 const whatsappRoutes = require('./whatsapp.routes');
+const whatsappEnhancedRoutes = require('./whatsappEnhanced.routes');
 const dashboardRoutes = require('./dashboard.routes');
 const analyticsRoutes = require('./analytics.routes');
 const adminRoutes = require('./admin.routes');
@@ -25,6 +26,8 @@ const priceIntelligenceRoutes = require('./priceIntelligence.routes');
 const queueRoutes = require('./queue.routes');
 const recoveryRoutes = require('./recovery.routes');
 const monitoringRoutes = require('./monitoring.routes');
+const deliveryRoutes = require('./delivery.routes');
+const pricingRoutes = require('./pricing.routes');
 
 const router = express.Router();
 
@@ -42,6 +45,7 @@ router.use('/vendor-intelligence', vendorIntelligenceRoutes);
 router.use('/financial-accounting', financialAccountingRoutes);
 router.use('/risk-management', riskManagementRoutes);
 router.use('/whatsapp', whatsappRoutes);
+router.use('/whatsapp/enhanced', whatsappEnhancedRoutes);
 router.use('/dashboard', dashboardRoutes);
 router.use('/analytics', analyticsRoutes);
 router.use('/admin', adminRoutes);
@@ -54,6 +58,8 @@ router.use('/price-intelligence', priceIntelligenceRoutes);
 router.use('/queues', queueRoutes);
 router.use('/recovery', recoveryRoutes);
 router.use('/monitoring', monitoringRoutes);
+router.use('/delivery', deliveryRoutes);
+router.use('/pricing', pricingRoutes);
 
 router.get('/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });

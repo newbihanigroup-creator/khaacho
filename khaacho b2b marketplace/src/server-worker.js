@@ -90,6 +90,15 @@ try {
   logger.error('Failed to start recovery worker', { error: error.message });
 }
 
+// Start analytics worker (Intelligence & Forecasting)
+try {
+  const analyticsWorker = require('./workers/analytics.worker');
+  analyticsWorker.start();
+  logger.info('Analytics worker initialized - intelligence engine running');
+} catch (error) {
+  logger.error('Failed to start analytics worker', { error: error.message });
+}
+
 logger.info('All workers initialized successfully');
 logger.info('Worker service is running');
 
@@ -113,6 +122,7 @@ const healthServer = http.createServer((req, res) => {
         vendorPerformance: 'running',
         priceIntelligence: 'running',
         recovery: 'running',
+        analytics: 'running',
       },
     }));
   } else {

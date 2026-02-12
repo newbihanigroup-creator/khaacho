@@ -496,6 +496,306 @@ class VendorInventoryService {
       throw error;
     }
   }
+
+  /**
+   * Restore stock on order cancellation (transactional)
+   */
+  async restoreStockOnCancellation(orderId, vendorId, productId, quantity) {
+    try {
+      console.log(`♻️ Restoring stock for cancelled order ${orderId}, vendor ${vendorId}, product ${productId}, qty ${quantity}`);
+      
+      const result = await prisma.$transaction(async (tx) => {
+        // Get current inventory
+        const inventory = await tx.vendorInventory.findUnique({
+          where: {
+            vendorId_productId: {
+              vendorId,
+              productId
+            }
+          }
+        });
+
+        if (!inventory) {
+          throw new Error('Inventory not found for vendor-product combination');
+        }
+
+        const newQuantity = inventory.availableQuantity + quantity;
+        const newStatus = newQuantity <= 0 ? 'OUT_OF_STOCK' : 
+                           newQuantity <= inventory.minStock ? 'LOW_STOCK' : 'AVAILABLE';
+
+        // Update inventory - restore stock
+        const updatedInventory = await tx.vendorInventory.update({
+          where: {
+            vendorId_productId: {
+              vendorId,
+              productId
+            }
+          },
+          data: {
+            availableQuantity: newQuantity,
+            status: newStatus,
+            lastUpdated: new Date(),
+            updatedAt: new Date()
+          }
+        });
+
+        console.log(`✅ Stock restored: ${inventory.availableQuantity} → ${newQuantity}`);
+
+        return {
+          previousQuantity: inventory.availableQuantity,
+          newQuantity,
+          status: newStatus,
+          inventory: updatedInventory
+        };
+      }, {
+        isolationLevel: 'Serializable' // Prevent race conditions
+      });
+
+      return result;
+
+    } catch (error) {
+      logger.error('Error restoring stock on cancellation', {
+        orderId,
+        vendorId,
+        productId,
+        quantity,
+        error: error.message
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Adjust stock with transaction safety (prevents negative stock)
+   */
+  async adjustStock(vendorId, productId, adjustment, reason = 'Manual adjustment') {
+    try {
+      console.log(`📊 Adjusting stock: vendor ${vendorId}, product ${productId}, adjustment ${adjustment}`);
+      
+      const result = await prisma.$transaction(async (tx) => {
+        // Lock the row for update
+        const inventory = await tx.vendorInventory.findUnique({
+          where: {
+            vendorId_productId: {
+              vendorId,
+              productId
+            }
+          }
+        });
+
+        if (!inventory) {
+          throw new Error('Inventory not found');
+        }
+
+        const newQuantity = inventory.availableQuantity + adjustment;
+
+        // Prevent negative stock
+        if (newQuantity < 0) {
+          throw new Error(`Cannot adjust stock: would result in negative quantity (current: ${inventory.availableQuantity}, adjustment: ${adjustment})`);
+        }
+
+        const newStatus = newQuantity <= 0 ? 'OUT_OF_STOCK' : 
+                           newQuantity <= inventory.minStock ? 'LOW_STOCK' : 'AVAILABLE';
+
+        // Update inventory
+        const updatedInventory = await tx.vendorInventory.update({
+          where: {
+            vendorId_productId: {
+              vendorId,
+              productId
+            }
+          },
+          data: {
+            availableQuantity: newQuantity,
+            status: newStatus,
+            lastUpdated: new Date(),
+            updatedAt: new Date()
+          }
+        });
+
+        console.log(`✅ Stock adjusted: ${inventory.availableQuantity} → ${newQuantity} (${reason})`);
+
+        return {
+          previousQuantity: inventory.availableQuantity,
+          newQuantity,
+          adjustment,
+          status: newStatus,
+          reason,
+          inventory: updatedInventory
+        };
+      }, {
+        isolationLevel: 'Serializable'
+      });
+
+      return result;
+
+    } catch (error) {
+      logger.error('Error adjusting stock', {
+        vendorId,
+        productId,
+        adjustment,
+        reason,
+        error: error.message
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Get low stock alerts
+   */
+  async getLowStockAlerts(vendorId = null) {
+    try {
+      console.log('🚨 Getting low stock alerts...');
+      
+      const where = {
+        OR: [
+          { status: 'LOW_STOCK' },
+          { status: 'OUT_OF_STOCK' }
+        ],
+        isActive: true
+      };
+
+      if (vendorId) {
+        where.vendorId = vendorId;
+      }
+
+      const alerts = await prisma.vendorInventory.findMany({
+        where,
+        include: {
+          vendor: {
+            include: {
+              user: {
+                select: {
+                  businessName: true,
+                  phoneNumber: true
+                }
+              }
+            }
+          },
+          product: {
+            select: {
+              name: true,
+              category: true,
+              unit: true
+            }
+          }
+        },
+        orderBy: [
+          { status: 'asc' }, // OUT_OF_STOCK first
+          { availableQuantity: 'asc' }
+        ]
+      });
+
+      return alerts.map(alert => ({
+        inventoryId: alert.id,
+        vendorId: alert.vendorId,
+        vendorName: alert.vendor.user.businessName,
+        vendorPhone: alert.vendor.user.phoneNumber,
+        productId: alert.productId,
+        productName: alert.product.name,
+        productCategory: alert.product.category,
+        unit: alert.product.unit,
+        currentStock: alert.availableQuantity,
+        minStock: alert.minStock,
+        status: alert.status,
+        alertLevel: alert.status === 'OUT_OF_STOCK' ? 'CRITICAL' : 'WARNING',
+        shortfall: Math.max(0, alert.minStock - alert.availableQuantity),
+        lastUpdated: alert.lastUpdated,
+        daysSinceUpdate: Math.floor((Date.now() - alert.lastUpdated.getTime()) / (1000 * 60 * 60 * 24))
+      }));
+
+    } catch (error) {
+      logger.error('Error getting low stock alerts', { error: error.message });
+      throw error;
+    }
+  }
+
+  /**
+   * Bulk stock update (transactional)
+   */
+  async bulkUpdateStock(updates) {
+    try {
+      console.log(`📦 Bulk updating ${updates.length} inventory items...`);
+      
+      const results = await prisma.$transaction(async (tx) => {
+        const updateResults = [];
+
+        for (const update of updates) {
+          const { vendorId, productId, availableQuantity, price, minStock } = update;
+
+          const inventory = await tx.vendorInventory.findUnique({
+            where: {
+              vendorId_productId: {
+                vendorId,
+                productId
+              }
+            }
+          });
+
+          if (!inventory) {
+            updateResults.push({
+              vendorId,
+              productId,
+              success: false,
+              error: 'Inventory not found'
+            });
+            continue;
+          }
+
+          const updateData = {
+            lastUpdated: new Date(),
+            updatedAt: new Date()
+          };
+
+          if (availableQuantity !== undefined) {
+            updateData.availableQuantity = availableQuantity;
+            updateData.status = availableQuantity <= 0 ? 'OUT_OF_STOCK' : 
+                              availableQuantity <= (minStock || inventory.minStock) ? 'LOW_STOCK' : 'AVAILABLE';
+          }
+          if (price !== undefined) updateData.price = price;
+          if (minStock !== undefined) updateData.minStock = minStock;
+
+          const updated = await tx.vendorInventory.update({
+            where: {
+              vendorId_productId: {
+                vendorId,
+                productId
+              }
+            },
+            data: updateData
+          });
+
+          updateResults.push({
+            vendorId,
+            productId,
+            success: true,
+            previousQuantity: inventory.availableQuantity,
+            newQuantity: updated.availableQuantity,
+            status: updated.status
+          });
+        }
+
+        return updateResults;
+      }, {
+        isolationLevel: 'Serializable'
+      });
+
+      const successCount = results.filter(r => r.success).length;
+      console.log(`✅ Bulk update complete: ${successCount}/${updates.length} successful`);
+
+      return {
+        total: updates.length,
+        successful: successCount,
+        failed: updates.length - successCount,
+        results
+      };
+
+    } catch (error) {
+      logger.error('Error in bulk stock update', { error: error.message });
+      throw error;
+    }
+  }
 }
 
 module.exports = new VendorInventoryService();

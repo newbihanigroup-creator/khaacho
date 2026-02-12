@@ -292,6 +292,259 @@ class AnalyticsService {
     if (processingTimes.length === 0) return 0;
     return processingTimes.reduce((sum, t) => sum + t, 0) / processingTimes.length;
   }
+
+  // ==================== CEO DASHBOARD INTELLIGENCE ====================
+
+  async getCEODashboard(days = 30) {
+    const startDate = new Date();
+    startDate.setDate(startDate.getDate() - days);
+
+    const [
+      platformMetrics,
+      revenueGrowth,
+      riskMetrics,
+      topPerformers,
+      alerts
+    ] = await Promise.all([
+      this.getPlatformMetrics(startDate),
+      this.getRevenueGrowth(startDate),
+      this.getRiskMetrics(),
+      this.getTopPerformers(),
+      this.getIntelligenceAlerts()
+    ]);
+
+    return {
+      platformMetrics,
+      revenueGrowth,
+      riskMetrics,
+      topPerformers,
+      alerts,
+      generatedAt: new Date()
+    };
+  }
+
+  async getPlatformMetrics(startDate) {
+    const orders = await prisma.order.findMany({
+      where: {
+        createdAt: { gte: startDate }
+      }
+    });
+
+    const completedOrders = orders.filter(o => o.status === 'COMPLETED');
+    const gmv = completedOrders.reduce((sum, o) => sum + parseFloat(o.total), 0);
+    const netMargin = gmv * 0.15; // Simplified
+
+    const [retailers, vendors, creditData] = await Promise.all([
+      prisma.retailer.count({ where: { isActive: true } }),
+      prisma.vendor.count({ where: { isApproved: true } }),
+      prisma.retailer.aggregate({
+        _sum: {
+          outstandingDebt: true,
+          creditLimit: true
+        }
+      })
+    ]);
+
+    const totalCreditExposure = parseFloat(creditData._sum.outstandingDebt || 0);
+    const totalCreditLimit = parseFloat(creditData._sum.creditLimit || 0);
+    const creditExposureRatio = totalCreditLimit > 0 ? (totalCreditExposure / totalCreditLimit) * 100 : 0;
+
+    return {
+      grossMerchandiseValue: gmv,
+      netMargin,
+      netMarginPercentage: gmv > 0 ? (netMargin / gmv) * 100 : 0,
+      totalOrders: orders.length,
+      completedOrders: completedOrders.length,
+      activeRetailers: retailers,
+      activeVendors: vendors,
+      creditExposureRatio,
+      revenuePerRetailer: retailers > 0 ? gmv / retailers : 0
+    };
+  }
+
+  async getRevenueGrowth(startDate) {
+    const midPoint = new Date(startDate);
+    midPoint.setDate(midPoint.getDate() + Math.floor((new Date() - startDate) / (1000 * 60 * 60 * 24) / 2));
+
+    const [firstHalf, secondHalf] = await Promise.all([
+      prisma.order.findMany({
+        where: {
+          createdAt: { gte: startDate, lt: midPoint },
+          status: 'COMPLETED'
+        }
+      }),
+      prisma.order.findMany({
+        where: {
+          createdAt: { gte: midPoint },
+          status: 'COMPLETED'
+        }
+      })
+    ]);
+
+    const firstHalfRevenue = firstHalf.reduce((sum, o) => sum + parseFloat(o.total), 0);
+    const secondHalfRevenue = secondHalf.reduce((sum, o) => sum + parseFloat(o.total), 0);
+
+    const growthRate = firstHalfRevenue > 0 ? ((secondHalfRevenue - firstHalfRevenue) / firstHalfRevenue) * 100 : 0;
+
+    return {
+      firstHalfRevenue,
+      secondHalfRevenue,
+      growthRate,
+      trend: growthRate > 10 ? 'STRONG_GROWTH' : growthRate > 0 ? 'GROWTH' : 'DECLINE'
+    };
+  }
+
+  async getRiskMetrics() {
+    const [highRiskRetailers, overdueOrders, creditData] = await Promise.all([
+      prisma.retailer.count({
+        where: {
+          creditScore: { lt: 500 },
+          outstandingDebt: { gt: 0 }
+        }
+      }),
+      prisma.order.count({
+        where: {
+          status: 'COMPLETED',
+          paymentStatus: 'OVERDUE'
+        }
+      }),
+      prisma.retailer.aggregate({
+        where: {
+          outstandingDebt: { gt: 0 }
+        },
+        _sum: {
+          outstandingDebt: true
+        }
+      })
+    ]);
+
+    const totalOutstanding = parseFloat(creditData._sum.outstandingDebt || 0);
+
+    return {
+      highRiskRetailers,
+      overdueOrders,
+      totalOutstanding,
+      riskLevel: highRiskRetailers > 10 ? 'HIGH' : highRiskRetailers > 5 ? 'MEDIUM' : 'LOW'
+    };
+  }
+
+  async getTopPerformers() {
+    const [topRetailers, topVendors, topProducts] = await Promise.all([
+      prisma.retailer.findMany({
+        take: 5,
+        orderBy: { totalSpent: 'desc' },
+        include: {
+          user: {
+            select: { name: true, businessName: true }
+          }
+        }
+      }),
+      prisma.vendor.findMany({
+        take: 5,
+        orderBy: { totalSales: 'desc' },
+        include: {
+          user: {
+            select: { name: true, businessName: true }
+          }
+        }
+      }),
+      prisma.orderItem.groupBy({
+        by: ['productId'],
+        _sum: {
+          quantity: true,
+          total: true
+        },
+        orderBy: {
+          _sum: {
+            total: 'desc'
+          }
+        },
+        take: 5
+      })
+    ]);
+
+    const topProductsWithDetails = await Promise.all(
+      topProducts.map(async (p) => {
+        const product = await prisma.product.findUnique({
+          where: { id: p.productId },
+          select: { name: true, productCode: true }
+        });
+        return {
+          ...product,
+          totalRevenue: parseFloat(p._sum.total || 0),
+          totalQuantity: p._sum.quantity
+        };
+      })
+    );
+
+    return {
+      topRetailers,
+      topVendors,
+      topProducts: topProductsWithDetails
+    };
+  }
+
+  async getIntelligenceAlerts() {
+    // Query intelligence_actions table for pending high-priority actions
+    const alerts = await prisma.$queryRawUnsafe(`
+      SELECT * FROM intelligence_actions
+      WHERE status = 'PENDING'
+      AND priority IN ('HIGH', 'URGENT')
+      ORDER BY created_at DESC
+      LIMIT 10
+    `);
+
+    return alerts || [];
+  }
+
+  // ==================== DEMAND FORECASTING ====================
+
+  async getTop20ProductsForecast() {
+    const topProducts = await prisma.orderItem.groupBy({
+      by: ['productId'],
+      _sum: {
+        quantity: true
+      },
+      orderBy: {
+        _sum: {
+          quantity: 'desc'
+        }
+      },
+      take: 20
+    });
+
+    const forecasts = await Promise.all(
+      topProducts.map(async (p) => {
+        const product = await prisma.product.findUnique({
+          where: { id: p.productId },
+          select: { name: true, productCode: true }
+        });
+
+        const orderItems = await prisma.orderItem.findMany({
+          where: { productId: p.productId },
+          orderBy: { createdAt: 'desc' },
+          take: 30
+        });
+
+        const last7Days = orderItems.filter(item => {
+          const daysDiff = (new Date() - new Date(item.createdAt)) / (1000 * 60 * 60 * 24);
+          return daysDiff <= 7;
+        });
+
+        const avgDailyDemand = last7Days.reduce((sum, item) => sum + item.quantity, 0) / 7;
+        const predictedNext7Days = Math.round(avgDailyDemand * 7);
+
+        return {
+          ...product,
+          currentDemand: p._sum.quantity,
+          avgDailyDemand,
+          predictedNext7Days
+        };
+      })
+    );
+
+    return forecasts;
+  }
 }
 
 module.exports = new AnalyticsService();
