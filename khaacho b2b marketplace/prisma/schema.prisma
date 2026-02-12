@@ -161,13 +161,15 @@ model Vendor {
   deletedAt         DateTime? @map("deleted_at")
 
   // Relations
-  vendorProducts  VendorProduct[]
+  vendorProducts VendorProduct[]
+  vendorInventories VendorInventory[]
   orders          Order[]
   creditLedgers   CreditLedger[]
   payments        Payment[]
   broadcastLogs   OrderBroadcastLog[]
   inventories     VendorInventory[]
   rankings        VendorRanking[]
+  settlements     VendorSettlement[]
 
   @@index([vendorCode])
   @@index([taxId])
@@ -248,6 +250,7 @@ model Retailer {
   creditLedgers   CreditLedger[]
   payments        Payment[]
   riskProfile     RetailerRiskProfile[]
+  invoices        Invoice[]
 
   @@index([retailerCode])
   @@index([creditScore])
@@ -281,6 +284,7 @@ model Product {
   // Relations
   vendorProducts VendorProduct[]
   orderItems     OrderItem[]
+  vendorInventories VendorInventory[]
 
   @@index([productCode])
   @@index([category, subCategory])
@@ -383,14 +387,10 @@ model Order {
   updatedAt         DateTime      @map("updated_at") @updatedAt
   createdBy         String? @map("created_by")
   createdByUser     User?         @relation("OrderCreatedBy", fields: [createdBy], references: [id], onDelete: Cascade)
-  // Relations - IMMUTABLE
+  // Relations
   items             OrderItem[]
-  creditLedgers     CreditLedger[]
-  payments          Payment[]
-  statusLogs        OrderStatusLog[]
-  broadcastLogs     OrderBroadcastLog[]
   invoices           Invoice[]
-  vendorSettlements   VendorSettlement[]
+  vendorSettlements VendorSettlement[]
 
   @@index([retailerId, createdAt(sort: Desc)])
   @@index([vendorId, createdAt(sort: Desc)])
