@@ -7,7 +7,6 @@ services:
     env: node
     region: oregon
     plan: starter
-    rootDir: khaacho b2b marketplace
     buildCommand: npm install && npx prisma generate
     startCommand: npm run start:web
     healthCheckPath: /api/health
@@ -62,7 +61,6 @@ services:
     env: node
     region: oregon
     plan: starter
-    rootDir: khaacho b2b marketplace
     buildCommand: npm install && npx prisma generate
     startCommand: npm run start:worker
     envVars:
