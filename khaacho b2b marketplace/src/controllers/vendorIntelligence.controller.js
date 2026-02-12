@@ -153,8 +153,8 @@ class VendorIntelligenceController {
             businessName: vendor.user?.businessName || 'Unknown',
             newScore: score,
             previousScore: vendor.rankings[0]?.vendorScore || 0,
-            rank: this.calculateNewRank(vendor.rankings[0]?.rank || 999, score)
-          success: true
+            rank: this.calculateNewRank(vendor.rankings[0]?.rank || 999, score),
+            success: true
           });
           
         } catch (error) {
