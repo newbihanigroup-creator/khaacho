@@ -232,9 +232,19 @@ const optionalAuth = async (req, res, next) => {
   }
 };
 
+/**
+ * Helper function for backward compatibility
+ * Combines authenticate + authorize
+ */
+const requireRole = (roles) => {
+  const rolesArray = Array.isArray(roles) ? roles : [roles];
+  return [authenticate, authorize(...rolesArray)];
+};
+
 module.exports = {
   authenticate,
   authorize,
   authorizeOwner,
   optionalAuth,
+  requireRole,
 };
