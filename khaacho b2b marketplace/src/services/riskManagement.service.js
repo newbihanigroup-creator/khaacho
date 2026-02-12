@@ -5,7 +5,7 @@ class RiskManagementService {
   async calculateRiskScore(retailerId) {
     try {
       console.log(`🎯 Calculating risk score for retailer: ${retailerId}`);
-      
+
       const retailer = await prisma.retailer.findUnique({
         where: { id: retailerId },
         include: {
@@ -38,7 +38,7 @@ class RiskManagementService {
       // Get payment history for last 6 months
       const sixMonthsAgo = new Date();
       sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
-      
+
       const paymentHistory = await prisma.payment.findMany({
         where: {
           retailerId,
@@ -64,7 +64,7 @@ class RiskManagementService {
         overdueScore * 20 +      // 20% weight
         orderFrequencyScore * 15 +   // 15% weight
         repaymentConsistencyScore * 20 +   // 20% weight
-        accountAgeScore * 20      // 20% weight
+        accountAgeScore * 20 +      // 20% weight
         50 // Base score for all retailers
       );
 
@@ -126,7 +126,7 @@ class RiskManagementService {
 
     paymentHistory.forEach(payment => {
       totalAmount = totalAmount.add(payment.amount);
-      
+
       // Check if payment was on time (within 7 days of due date)
       if (payment.processedAt) {
         const dueDate = payment.order?.dueDate;
@@ -146,7 +146,7 @@ class RiskManagementService {
     });
 
     const onTimeRate = paymentHistory.length > 0 ? onTimePayments / paymentHistory.length : 0;
-    
+
     // Score: 50 (base) + onTimeRate * 50 (max 50 points for perfect payments)
     return Math.min(100, Math.max(0, 50 + (onTimeRate * 50)));
 
@@ -154,7 +154,7 @@ class RiskManagementService {
 
   calculateOverdueScore(overdueDays) {
     if (!overdueDays || overdueDays <= 0) return 10;
-    
+
     if (overdueDays <= 7) return 5;
     if (overdueDays <= 15) return 0;
     if (overdueDays <= 30) return -10;
@@ -167,7 +167,7 @@ class RiskManagementService {
 
     const daysSinceFirstOrder = Math.floor((Date.now() - lastPaymentDate.getTime()) / (1000 * 60 * 60 * 24));
     const monthsSinceFirstOrder = daysSinceFirstOrder / 30;
-    
+
     // Score based on order frequency (more orders = higher score)
     if (monthsSinceFirstOrder >= 12) return 15;
     if (monthsSinceFirstOrder >= 6) return 10;
@@ -183,7 +183,7 @@ class RiskManagementService {
 
     paymentHistory.forEach(payment => {
       totalPayments++;
-      
+
       // Check if payment was on time
       if (payment.processedAt) {
         const dueDate = payment.order?.dueDate;
@@ -197,7 +197,7 @@ class RiskManagementService {
     });
 
     const consistencyRate = totalPayments > 0 ? consistentPayments / totalPayments : 0;
-    
+
     // Score: 50 (base) + consistencyRate * 50 (max 50 points for consistent payments)
     return Math.min(100, Math.max(0, 50 + (consistencyRate * 50)));
 
@@ -207,7 +207,7 @@ class RiskManagementService {
     if (!createdAt || !lastPaymentDate) return 10;
 
     const daysSinceCreation = Math.floor((Date.now() - createdAt.getTime()) / (1000 * 60 * 60 * 24));
-    const daysSinceLastPayment = lastPaymentDate ? 
+    const daysSinceLastPayment = lastPaymentDate ?
       Math.floor((Date.now() - lastPaymentDate.getTime()) / (1000 * 60 * 60 * 24)) : 0;
 
     // Score based on account age (newer accounts = lower risk)
@@ -221,7 +221,7 @@ class RiskManagementService {
   async updateRiskProfileOnTransaction(retailerId, transactionData) {
     try {
       console.log(`🔄 Updating risk profile for retailer: ${retailerId}`);
-      
+
       const profile = await prisma.retailerRiskProfile.findUnique({
         where: { retailerId },
         include: {
@@ -361,22 +361,6 @@ class RiskManagementService {
             }
           }
         },
-          retailer: {
-            select: {
-              lastPaymentDate: true
-            }
-          }
-        },
-          retailer: {
-            include: {
-              user: {
-                select: {
-                  businessName: true
-                }
-              }
-            }
-          }
-        },
         orderBy: { processedAt: 'desc' },
         take: 100
       });
@@ -388,7 +372,7 @@ class RiskManagementService {
 
       payments.forEach(payment => {
         totalPayments++;
-        
+
         const dueDate = payment.order?.dueDate;
         if (dueDate) {
           const daysLate = Math.floor((new Date() - dueDate.getTime()) / (1000 * 60 * 60 * 24));
@@ -431,7 +415,7 @@ class RiskManagementService {
       retailer.orders.forEach(order => {
         if (order.status === 'COMPLETED' || order.status === 'DELIVERED') {
           totalOrders++;
-          
+
           const dueDate = order.dueDate || new Date();
           if (dueDate) {
             const daysOverdue = Math.floor((Date.now() - dueDate.getTime()) / (1000 * 60 * 60 * 24));
@@ -523,12 +507,12 @@ class RiskManagementService {
       // Analyze order patterns
       const orderAmounts = recentOrders.map(o => parseFloat(o.total.toString() || '0'));
       const orderTimes = recentOrders.map(o => o.createdAt.getTime());
-      
+
       // Check for sudden large order spike
       if (orderAmounts.length > 5) {
         const avgAmount = orderAmounts.reduce((sum, a) => sum + a, 0) / orderAmounts.length;
         const maxAmount = Math.max(...orderAmounts);
-        
+
         if (maxAmount > avgAmount * 3) {
           fraudIndicators.suddenLargeOrderSpike = true;
         }
@@ -541,9 +525,9 @@ class RiskManagementService {
           const timeDiff = (orderTimes[i] - orderTimes[i - 1]) / (1000 * 60 * 1000);
           timeDifferences.push(timeDiff);
         }
-        
+
         const avgTimeDiff = timeDifferences.reduce((sum, diff) => sum + diff, 0) / timeDifferences.length;
-        
+
         // If average time between orders is less than 1 hour, it's suspicious
         if (avgTimeDiff < 3600000) { // 1 hour in milliseconds
           fraudIndicators.rapidOrderFrequency = true;
@@ -602,7 +586,7 @@ class RiskManagementService {
   async getRiskDashboard() {
     try {
       console.log('📊 Generating risk dashboard...');
-      
+
       const [riskProfiles, summaryStats] = await Promise.all([
         prisma.retailerRiskProfile.findMany({
           where: {
@@ -620,7 +604,6 @@ class RiskManagementService {
                 }
               }
             }
-          }
           },
           orderBy: { riskScore: 'desc' },
           take: 50
@@ -633,16 +616,17 @@ class RiskManagementService {
             }
           },
           _count: {
-            id: true
+            id: true,
+            defaultFlag: true,
+            fraudFlag: true,
+            adminReviewRequired: true
           },
           _avg: {
-            riskScore: true,
-            outstandingDebt: true
+            riskScore: true
           },
           _sum: {
-            creditLimit: true,
-            currentOutstanding: true
-          }
+            currentOutstanding: true,
+            creditLimit: true
           }
         })
       ]);
@@ -675,9 +659,9 @@ class RiskManagementService {
             }
           }
         },
-          orderBy: { riskScore: 'desc' },
-          take: 20
-        });
+        orderBy: { riskScore: 'desc' },
+        take: 20
+      });
 
       const blockedProfiles = await prisma.retailerRiskProfile.findMany({
         where: {
@@ -686,21 +670,21 @@ class RiskManagementService {
             deletedAt: null
           }
         },
-          include: {
-            retailer: {
-              include: {
-                user: {
-                  select: {
-                    businessName: true,
-                    phoneNumber: true
-                  }
+        include: {
+          retailer: {
+            include: {
+              user: {
+                select: {
+                  businessName: true,
+                  phoneNumber: true
                 }
               }
             }
-          },
-          orderBy: { lastScoreUpdate: 'desc' },
-          take: 20
-        });
+          }
+        },
+        orderBy: { lastScoreUpdate: 'desc' },
+        take: 20
+      });
 
       const dashboard = {
         summary: {
@@ -709,10 +693,9 @@ class RiskManagementService {
           averageRiskScore: summaryStats._avg.riskScore,
           totalOverdueAmount: summaryStats._sum.currentOutstanding,
           averageOverdueDays: 0,
-          flaggedAccounts: summaryStats._count.defaultFlag + summaryStats._count.fraudFlag + summaryStats._count.adminReviewRequired
+          flaggedAccounts: (summaryStats._count.defaultFlag || 0) + (summaryStats._count.fraudFlag || 0) + (summaryStats._count.adminReviewRequired || 0)
         },
-          riskDistribution
-        },
+        riskDistribution,
         highRiskProfiles: highRiskProfiles.map(profile => ({
           retailerId: profile.retailerId,
           businessName: profile.retailer.user.businessName,
@@ -745,10 +728,9 @@ class RiskManagementService {
           previousScore: profile.riskScore,
           newScore: profile.riskScore,
           riskLevel: profile.riskLevel,
-          changeReason: this.getRiskChangeReason(profile.riskScore, profile.riskLevel),
+          changeReason: this.getRiskChangeReason(profile.riskScore, profile.riskScore, profile.riskLevel),
           changedAt: profile.lastScoreUpdate
         }))
-      })
       };
 
       console.log('✅ Risk dashboard generated');
@@ -773,7 +755,6 @@ class RiskManagementService {
       return 'Low risk achieved';
     } else {
       return 'Risk level maintained';
-    }
     }
   }
 }
