@@ -4,10 +4,11 @@
   "description": "B2B ordering and credit platform for Surkhet, Nepal",
   "main": "src/server.js",
   "scripts": {
-    "start": "node src/server-web.js",
+    "start": "node src/server.js",
     "start:web": "node src/server-web.js",
     "start:worker": "node src/server-worker.js",
     "build": "prisma generate",
+    "postinstall": "prisma generate",
     "dev": "nodemon src/server.js",
     "dev:web": "nodemon src/server-web.js",
     "dev:worker": "nodemon src/server-worker.js",

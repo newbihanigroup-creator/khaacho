@@ -2,11 +2,11 @@ services:
   # Web Service - API Server
   - type: web
     name: khaacho-api
-    env: docker
+    env: node
     region: oregon
     plan: starter
-    dockerfilePath: ./Dockerfile
-    dockerContext: .
+    buildCommand: npm install && npx prisma generate
+    startCommand: npm start
     healthCheckPath: /api/health
     envVars:
       - key: NODE_ENV
@@ -50,44 +50,15 @@ services:
         value: false
       - key: ASYNC_NOTIFICATIONS
         value: true
-      - key: MONITORING_ORDER_RATE_THRESHOLD
-        value: 100
-      - key: MONITORING_JOB_FAILURE_THRESHOLD
-        value: 10
-      - key: MONITORING_WHATSAPP_FAILURE_THRESHOLD
-        value: 20
-      - key: MONITORING_API_ERROR_THRESHOLD
-        value: 5
-      - key: MONITORING_DB_LATENCY_THRESHOLD
-        value: 1000
-      - key: MONITORING_CPU_THRESHOLD
-        value: 80
-      - key: MONITORING_MEMORY_THRESHOLD
-        value: 80
-      - key: MONITORING_DISK_THRESHOLD
-        value: 85
-      - key: MONITORING_ALERT_COOLDOWN
-        value: 300000
-      - key: MONITORING_ENABLE_EMAIL_ALERTS
-        value: true
-      - key: MONITORING_ENABLE_SMS_ALERTS
-        value: false
-      - key: MONITORING_ENABLE_WEBHOOK_ALERTS
-        value: false
-      - key: ALERT_EMAIL_FROM
-        sync: false
-      - key: ALERT_EMAIL_TO
-        sync: false
 
   # Worker Service - Background Jobs
   - type: worker
     name: khaacho-worker
-    env: docker
+    env: node
     region: oregon
     plan: starter
-    dockerfilePath: ./Dockerfile
-    dockerContext: .
-    dockerCommand: node src/server-worker.js
+    buildCommand: npm install && npx prisma generate
+    startCommand: npm run start:worker
     envVars:
       - key: NODE_ENV
         value: production
@@ -120,12 +91,6 @@ services:
         value: true
       - key: ENABLE_BACKGROUND_JOBS
         value: true
-      - key: MONITORING_ORDER_RATE_THRESHOLD
-        value: 100
-      - key: MONITORING_JOB_FAILURE_THRESHOLD
-        value: 10
-      - key: MONITORING_WHATSAPP_FAILURE_THRESHOLD
-        value: 20
 
 databases:
   - name: khaacho-db
@@ -134,11 +99,3 @@ databases:
     plan: starter
     region: oregon
     postgresMajorVersion: 15
-
-  # Redis Service
-  - type: redis
-    name: khaacho-redis
-    region: oregon
-    plan: starter
-    maxmemoryPolicy: allkeys-lru
-    ipAllowList: []
