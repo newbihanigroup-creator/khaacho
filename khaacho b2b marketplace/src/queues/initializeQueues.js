@@ -14,16 +14,58 @@ function initializeQueues() {
   try {
     logger.info('Initializing job queues...');
 
+    // Check if Redis is available
+    if (!process.env.REDIS_URL && !process.env.REDIS_HOST) {
+      logger.warn('Redis not configured - queues will not be initialized');
+      logger.warn('Set REDIS_URL environment variable to enable job queues');
+      return null;
+    }
+
     // Initialize queue manager
     queueManager.initialize();
 
     // Register processors with concurrency settings
-    queueManager.registerProcessor('WHATSAPP', whatsappProcessor, 5); // 5 concurrent WhatsApp messages
-    queueManager.registerProcessor('CREDIT_SCORE', creditScoreProcessor, 2); // 2 concurrent calculations
-    queueManager.registerProcessor('ORDER_ROUTING', orderRoutingProcessor, 3); // 3 concurrent routing operations
-    queueManager.registerProcessor('PAYMENT_REMINDERS', paymentReminderProcessor, 3); // 3 concurrent reminders
-    queueManager.registerProcessor('REPORT_GENERATION', reportGenerationProcessor, 1); // 1 report at a time (resource intensive)
-    queueManager.registerProcessor('ORDER_PROCESSING', orderProcessingProcessor, 5); // 5 concurrent order operations
+    try {
+      queueManager.registerProcessor('WHATSAPP', whatsappProcessor, 5);
+      logger.info('WhatsApp queue processor registered');
+    } catch (error) {
+      logger.error('Failed to register WhatsApp processor', { error: error.message });
+    }
+
+    try {
+      queueManager.registerProcessor('CREDIT_SCORE', creditScoreProcessor, 2);
+      logger.info('Credit score queue processor registered');
+    } catch (error) {
+      logger.error('Failed to register credit score processor', { error: error.message });
+    }
+
+    try {
+      queueManager.registerProcessor('ORDER_ROUTING', orderRoutingProcessor, 3);
+      logger.info('Order routing queue processor registered');
+    } catch (error) {
+      logger.error('Failed to register order routing processor', { error: error.message });
+    }
+
+    try {
+      queueManager.registerProcessor('PAYMENT_REMINDERS', paymentReminderProcessor, 3);
+      logger.info('Payment reminders queue processor registered');
+    } catch (error) {
+      logger.error('Failed to register payment reminders processor', { error: error.message });
+    }
+
+    try {
+      queueManager.registerProcessor('REPORT_GENERATION', reportGenerationProcessor, 1);
+      logger.info('Report generation queue processor registered');
+    } catch (error) {
+      logger.error('Failed to register report generation processor', { error: error.message });
+    }
+
+    try {
+      queueManager.registerProcessor('ORDER_PROCESSING', orderProcessingProcessor, 5);
+      logger.info('Order processing queue processor registered');
+    } catch (error) {
+      logger.error('Failed to register order processing processor', { error: error.message });
+    }
 
     logger.info('All job queues initialized successfully');
 
@@ -33,7 +75,9 @@ function initializeQueues() {
       error: error.message,
       stack: error.stack,
     });
-    throw error;
+    // Don't throw - allow app to start without queues
+    logger.warn('Application will continue without job queues');
+    return null;
   }
 }
 

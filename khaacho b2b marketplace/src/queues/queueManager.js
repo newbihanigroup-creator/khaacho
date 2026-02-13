@@ -2,17 +2,49 @@ const Queue = require('bull');
 const logger = require('../utils/logger');
 const config = require('../config');
 
-// Queue configuration - support both REDIS_URL and individual settings
-const REDIS_CONFIG = config.redis.url 
-  ? config.redis.url // Use REDIS_URL if available (Render format)
-  : {
+// Redis connection configuration with retry strategy for Render
+const getRedisConfig = () => {
+  if (config.redis.url) {
+    // Parse REDIS_URL for Render
+    return {
+      redis: config.redis.url,
+      settings: {
+        maxRetriesPerRequest: null,
+        enableReadyCheck: false,
+        retryStrategy: (times) => {
+          const delay = Math.min(times * 50, 2000);
+          logger.warn(`Redis connection retry attempt ${times}, waiting ${delay}ms`);
+          return delay;
+        },
+        reconnectOnError: (err) => {
+          logger.error('Redis reconnect on error', { error: err.message });
+          return true; // Always reconnect
+        },
+      },
+    };
+  }
+
+  // Individual settings fallback
+  return {
+    redis: {
       host: config.redis.host,
       port: config.redis.port,
       password: config.redis.password,
       db: config.redis.db,
       maxRetriesPerRequest: null,
       enableReadyCheck: false,
-    };
+      retryStrategy: (times) => {
+        const delay = Math.min(times * 50, 2000);
+        logger.warn(`Redis connection retry attempt ${times}, waiting ${delay}ms`);
+        return delay;
+      },
+      reconnectOnError: (err) => {
+        logger.error('Redis reconnect on error', { error: err.message });
+        return true;
+      },
+    },
+  };
+};
 
 // Default job options
 const DEFAULT_JOB_OPTIONS = {
@@ -21,8 +53,8 @@ const DEFAULT_JOB_OPTIONS = {
     type: 'exponential',
     delay: 2000,
   },
-  removeOnComplete: 100, // Keep last 100 completed jobs
-  removeOnFail: 500, // Keep last 500 failed jobs
+  removeOnComplete: 100,
+  removeOnFail: 500,
 };
 
 // Queue definitions
@@ -40,39 +72,82 @@ class QueueManager {
   constructor() {
     this.queues = {};
     this.processors = {};
+    this.isInitialized = false;
   }
 
   /**
-   * Initialize all queues
+   * Initialize all queues with error handling
    */
   initialize() {
+    if (this.isInitialized) {
+      logger.warn('Queue manager already initialized');
+      return;
+    }
+
     logger.info('Initializing queue manager...');
 
-    // Create all queues
-    Object.entries(QUEUES).forEach(([key, queueName]) => {
-      this.queues[key] = new Queue(queueName, {
-        redis: REDIS_CONFIG,
-        defaultJobOptions: DEFAULT_JOB_OPTIONS,
+    try {
+      const redisConfig = getRedisConfig();
+
+      // Create all queues
+      Object.entries(QUEUES).forEach(([key, queueName]) => {
+        try {
+          this.queues[key] = new Queue(queueName, {
+            ...redisConfig,
+            defaultJobOptions: DEFAULT_JOB_OPTIONS,
+          });
+
+          // Setup event listeners
+          this.setupQueueEvents(this.queues[key], queueName);
+          
+          logger.info(`Queue ${queueName} initialized successfully`);
+        } catch (error) {
+          logger.error(`Failed to initialize queue ${queueName}`, {
+            error: error.message,
+            stack: error.stack,
+          });
+          // Don't throw - allow other queues to initialize
+        }
       });
 
-      // Setup event listeners
-      this.setupQueueEvents(this.queues[key], queueName);
-    });
-
-    logger.info(`Initialized ${Object.keys(this.queues).length} queues`);
+      this.isInitialized = true;
+      logger.info(`Initialized ${Object.keys(this.queues).length} queues`);
+    } catch (error) {
+      logger.error('Failed to initialize queue manager', {
+        error: error.message,
+        stack: error.stack,
+      });
+      throw error;
+    }
   }
 
   /**
    * Setup event listeners for a queue
    */
   setupQueueEvents(queue, queueName) {
+    // Error handling
     queue.on('error', (error) => {
       logger.error(`Queue ${queueName} error`, {
         error: error.message,
+        code: error.code,
         stack: error.stack,
       });
     });
 
+    // Redis connection events
+    queue.on('ready', () => {
+      logger.info(`Queue ${queueName} Redis connection ready`);
+    });
+
+    queue.on('close', () => {
+      logger.warn(`Queue ${queueName} Redis connection closed`);
+    });
+
+    queue.on('reconnecting', () => {
+      logger.info(`Queue ${queueName} Redis reconnecting...`);
+    });
+
+    // Job events
     queue.on('waiting', (jobId) => {
       logger.debug(`Job ${jobId} is waiting in queue ${queueName}`);
     });
@@ -292,5 +367,4 @@ const queueManager = new QueueManager();
 module.exports = {
   queueManager,
   QUEUES,
-  REDIS_CONFIG,
 };
