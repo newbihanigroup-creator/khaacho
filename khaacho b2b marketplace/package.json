@@ -31,7 +31,7 @@
   "author": "Khaacho Team",
   "license": "MIT",
   "dependencies": {
-    "@prisma/client": "^5.8.0",
+    "@prisma/client": "^5.22.0",
     "axios": "^1.6.5",
     "bcryptjs": "^2.4.3",
     "bull": "^4.12.0",
@@ -47,7 +47,7 @@
     "jsonwebtoken": "^9.0.2",
     "node-cron": "^3.0.3",
     "pg": "^8.18.0",
-    "prisma": "^5.8.0",
+    "prisma": "^5.22.0",
     "twilio": "^4.23.0",
     "winston": "^3.11.0",
     "winston-daily-rotate-file": "^4.7.1"
