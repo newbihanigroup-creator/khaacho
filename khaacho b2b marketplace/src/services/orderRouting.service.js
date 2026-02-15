@@ -2,6 +2,7 @@ const prisma = require('../config/database');
 const logger = require('../utils/logger');
 const vendorPerformanceService = require('./vendorPerformance.service');
 const priceIntelligenceService = require('./priceIntelligence.service');
+const vendorLoadBalancing = require('./vendorLoadBalancing.service');
 
 class OrderRoutingService {
   /**
@@ -44,6 +45,14 @@ class OrderRoutingService {
       where: { id: retailerId },
       include: { user: true },
     });
+
+    // Check if load balancing is enabled
+    const useLoadBalancing = process.env.ENABLE_LOAD_BALANCING !== 'false';
+
+    if (useLoadBalancing && items.length === 1) {
+      // Use load balancing for single-item orders
+      return await this._handleLoadBalancedRouting(orderId, orderData, config);
+    }
 
     // Find eligible vendors
     const eligibleVendors = await this._findEligibleVendors(items, config);
@@ -124,8 +133,115 @@ class OrderRoutingService {
   }
 
   /**
-   * Handle manual vendor override
+   * Handle load-balanced routing for single-item orders
    */
+  async _handleLoadBalancedRouting(orderId, orderData, config) {
+    const { retailerId, items } = orderData;
+    const item = items[0]; // Single item
+
+    try {
+      // Use load balancing service
+      const selectedVendor = await vendorLoadBalancing.selectVendorWithLoadBalancing(
+        item.productId,
+        item.quantity,
+        { retailerId }
+      );
+
+      // Calculate acceptance deadline
+      const acceptanceDeadline = new Date();
+      acceptanceDeadline.setHours(
+        acceptanceDeadline.getHours() + (config.acceptance_timeout?.hours || 2)
+      );
+
+      // Log routing decision
+      const routingLog = await prisma.orderRoutingLog.create({
+        data: {
+          orderId,
+          retailerId,
+          routingAttempt: 1,
+          vendorsEvaluated: [{
+            vendorId: selectedVendor.vendorId,
+            vendorCode: selectedVendor.vendorCode,
+            overallScore: selectedVendor.intelligenceScore,
+            scores: {
+              intelligence: selectedVendor.intelligenceScore,
+              capacity: 100 - (selectedVendor.activeOrdersCount / 10 * 100),
+            },
+            rank: 1,
+          }],
+          selectedVendorId: selectedVendor.vendorId,
+          routingReason: `Load-balanced selection: ${selectedVendor.vendorCode} (Intelligence: ${selectedVendor.intelligenceScore}, Active: ${selectedVendor.activeOrdersCount})`,
+          routingCriteria: {
+            method: 'load-balancing',
+            strategy: vendorLoadBalancing.getConfiguration().loadBalancingStrategy,
+          },
+          acceptanceDeadline,
+          isManualOverride: false,
+        },
+      });
+
+      // Create vendor acceptance record
+      await prisma.vendorOrderAcceptance.create({
+        data: {
+          vendorId: selectedVendor.vendorId,
+          orderId,
+          routingLogId: routingLog.id,
+          status: 'PENDING',
+          notifiedAt: new Date(),
+          responseDeadline: acceptanceDeadline,
+        },
+      });
+
+      // Log load balancing decision
+      await vendorLoadBalancing.logLoadBalancingDecision({
+        orderId,
+        productId: item.productId,
+        selectedVendorId: selectedVendor.vendorId,
+        candidateVendors: [selectedVendor],
+        strategy: 'automatic-load-balanced',
+        reason: 'Order routing with load balancing',
+      });
+
+      logger.info('Order routed with load balancing', {
+        orderId,
+        selectedVendor: selectedVendor.vendorCode,
+        activeOrders: selectedVendor.activeOrdersCount,
+        intelligenceScore: selectedVendor.intelligenceScore,
+      });
+
+      return {
+        selectedVendor: selectedVendor.vendorId,
+        fallbackVendor: null,
+        routingLog,
+        rankedVendors: [selectedVendor],
+        acceptanceDeadline,
+        loadBalanced: true,
+      };
+    } catch (error) {
+      logger.warn('Load-balanced routing failed, falling back to standard routing', {
+        orderId,
+        error: error.message,
+      });
+
+      // Fallback to standard routing
+      return await this._handleStandardRouting(orderId, orderData, config);
+    }
+  }
+
+  /**
+   * Handle standard routing (original logic)
+   */
+  async _handleStandardRouting(orderId, orderData, config) {
+    const { retailerId, items } = orderData;
+
+    // Get retailer location
+    const retailer = await prisma.retailer.findUnique({
+      where: { id: retailerId },
+      include: { user: true },
+    });
+
+    // Find eligible vendors
+    const eligibleVendors = await this._findEligibleVendors(items, config);
   async _handleManualRouting(orderId, orderData, vendorId, overrideBy, overrideReason) {
     const { retailerId } = orderData;
 

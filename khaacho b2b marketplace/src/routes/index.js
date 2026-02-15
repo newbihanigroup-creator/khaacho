@@ -28,8 +28,40 @@ const recoveryRoutes = require('./recovery.routes');
 const monitoringRoutes = require('./monitoring.routes');
 const deliveryRoutes = require('./delivery.routes');
 const pricingRoutes = require('./pricing.routes');
+const imageUploadRoutes = require('./imageUpload.routes');
+const orderValidationRoutes = require('./orderValidation.routes');
+const vendorSelectionRoutes = require('./vendorSelection.routes');
+const repeatOrderPredictionRoutes = require('./repeatOrderPrediction.routes');
+const unifiedOrderParserRoutes = require('./unifiedOrderParser.routes');
+const vendorLoadBalancingRoutes = require('./vendorLoadBalancing.routes');
+const enhancedCreditScoringRoutes = require('./enhancedCreditScoring.routes');
+const adminDashboardRoutes = require('./adminDashboard.routes');
+const whatsappIntentDetectionRoutes = require('./whatsappIntentDetection.routes');
+const queueAdminRoutes = require('./queueAdmin.routes');
+const orderTimeoutRoutes = require('./orderTimeout.routes');
+const hardenedWhatsappRoutes = require('./hardenedWhatsapp.routes');
+const safeModeRoutes = require('./safeMode.routes');
+const vendorScoringRoutes = require('./vendorScoring.routes');
+const orderBatchingRoutes = require('./orderBatching.routes');
+const multiModalOrderParserRoutes = require('./multiModalOrderParser.routes');
+const customerIntelligenceRoutes = require('./customerIntelligence.routes');
+const selfHealingRoutes = require('./selfHealing.routes');
 
-const router = express.Router();
+/**
+ * Create main router with health service
+ * Health routes are initialized separately in server.js
+ * 
+ * @param {Object} options - Router options
+ * @param {Object} options.healthRoutes - Health routes (optional)
+ * @returns {express.Router} Express router
+ */
+function createRouter(options = {}) {
+  const router = express.Router();
+
+  // Health routes (if provided, mount at root level)
+  if (options.healthRoutes) {
+    router.use('/', options.healthRoutes);
+  }
 
 router.use('/auth', authRoutes);
 router.use('/orders', orderRoutes);
@@ -60,9 +92,30 @@ router.use('/recovery', recoveryRoutes);
 router.use('/monitoring', monitoringRoutes);
 router.use('/delivery', deliveryRoutes);
 router.use('/pricing', pricingRoutes);
+router.use('/orders', imageUploadRoutes);
+router.use('/order-validation', orderValidationRoutes);
+router.use('/vendor-selection', vendorSelectionRoutes);
+router.use('/repeat-order-prediction', repeatOrderPredictionRoutes);
+router.use('/unified-order-parser', unifiedOrderParserRoutes);
+router.use('/load-balancing', vendorLoadBalancingRoutes);
+router.use('/enhanced-credit-scoring', enhancedCreditScoringRoutes);
+router.use('/admin-dashboard', adminDashboardRoutes);
+router.use('/whatsapp-intent', whatsappIntentDetectionRoutes);
+router.use('/queue-admin', queueAdminRoutes);
+router.use('/admin/order-timeout', orderTimeoutRoutes);
+router.use('/whatsapp/hardened', hardenedWhatsappRoutes);
+router.use('/admin/safe-mode', safeModeRoutes);
+router.use('/vendor-scoring', vendorScoringRoutes);
+router.use('/order-batching', orderBatchingRoutes);
+router.use('/order-parser', multiModalOrderParserRoutes);
+router.use('/customer-intelligence', customerIntelligenceRoutes);
+router.use('/self-healing', selfHealingRoutes);
 
-router.get('/health', (req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString() });
-});
+  return router;
+}
 
-module.exports = router;
+// Export factory function for flexibility
+module.exports = createRouter;
+
+// Also export default router for backward compatibility
+module.exports.default = createRouter();

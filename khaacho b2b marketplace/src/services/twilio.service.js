@@ -189,20 +189,40 @@ Contact support: ${process.env.SUPPORT_PHONE}`;
     // Remove 'whatsapp:' prefix early
     const phoneNumber = from.replace('whatsapp:', '');
 
-    try {
-      logger.info('Processing incoming WhatsApp message', {
-        from: phoneNumber,
-        body: body?.substring(0, 100),
-        hasMedia: !!mediaUrl,
-      });
+    // ============================================================================
+    // STRUCTURED LOGGING - Step 1: Message Received
+    // ============================================================================
+    const logContext = {
+      step: 'MESSAGE_RECEIVED',
+      phoneNumber,
+      messageBody: body,
+      messageLength: body?.length || 0,
+      hasMedia: !!mediaUrl,
+      timestamp: new Date().toISOString(),
+    };
+    
+    console.log('📨 [WEBHOOK] Incoming WhatsApp Message:', JSON.stringify(logContext, null, 2));
+    logger.info('WhatsApp message received', logContext);
 
+    try {
       if (!this.initialized) {
+        console.log('❌ [WEBHOOK] Twilio not initialized');
         logger.warn('Twilio not initialized - cannot process message');
         return { success: false, message: 'Twilio not initialized' };
       }
 
-      // Check if user is asking for help
-      if (body?.toLowerCase().trim() === 'help') {
+      // ============================================================================
+      // STRUCTURED LOGGING - Step 2: Check for Help Command
+      // ============================================================================
+      const isHelpCommand = body?.toLowerCase().trim() === 'help';
+      console.log('🔍 [WEBHOOK] Checking message type:', {
+        step: 'MESSAGE_TYPE_CHECK',
+        isHelpCommand,
+        trimmedBody: body?.toLowerCase().trim(),
+      });
+
+      if (isHelpCommand) {
+        console.log('ℹ️ [WEBHOOK] Help command detected - sending help message');
         return await this.sendWhatsAppMessage(
           phoneNumber,
           `🤝 *Khaacho B2B Marketplace Help*
@@ -218,23 +238,51 @@ Call us: ${process.env.SUPPORT_PHONE || '+977-9800000000'}`
         );
       }
 
-      // Check if this is a vendor response (ACCEPT/DECLINE)
+      // ============================================================================
+      // STRUCTURED LOGGING - Step 3: Check for Vendor Response
+      // ============================================================================
       const vendorResponse = this.parseVendorResponse(body);
+      console.log('🔍 [WEBHOOK] Checking vendor response:', {
+        step: 'VENDOR_RESPONSE_CHECK',
+        isVendorResponse: vendorResponse.isVendorResponse,
+        action: vendorResponse.action,
+      });
+
       if (vendorResponse.isVendorResponse) {
+        console.log('👨‍💼 [WEBHOOK] Vendor response detected - handling vendor action');
         return await this.handleVendorResponse(phoneNumber, vendorResponse);
       }
 
-      // Check if this is a retailer confirmation (CONFIRM/ISSUE)
+      // ============================================================================
+      // STRUCTURED LOGGING - Step 4: Check for Retailer Confirmation
+      // ============================================================================
       const confirmationResponse = this.parseRetailerConfirmation(body);
+      console.log('🔍 [WEBHOOK] Checking retailer confirmation:', {
+        step: 'CONFIRMATION_CHECK',
+        isConfirmationResponse: confirmationResponse.isConfirmationResponse,
+        action: confirmationResponse.action,
+      });
+
       if (confirmationResponse.isConfirmationResponse) {
+        console.log('✅ [WEBHOOK] Retailer confirmation detected - handling confirmation');
         return await this.handleRetailerConfirmation(phoneNumber, confirmationResponse);
       }
 
-      // Parse message for order
+      // ============================================================================
+      // STRUCTURED LOGGING - Step 5: Parse Order Message
+      // ============================================================================
       const orderData = this.parseOrderMessage(body);
+      console.log('🔍 [WEBHOOK] Order parsing result:', {
+        step: 'ORDER_PARSE',
+        isOrder: orderData.isOrder,
+        quantity: orderData.quantity,
+        unit: orderData.unit,
+        productName: orderData.productName,
+        originalMessage: orderData.originalMessage,
+      });
       
       if (orderData.isOrder) {
-        console.log('📦 Parsed Order:', orderData);
+        console.log('📦 [WEBHOOK] Valid order detected - processing order');
         
         // Check if vendors have available stock
         const availableVendors = await vendorInventoryService.findAvailableVendors(
@@ -242,7 +290,16 @@ Call us: ${process.env.SUPPORT_PHONE || '+977-9800000000'}`
           orderData.quantity
         );
 
+        console.log('🏪 [WEBHOOK] Vendor availability check:', {
+          step: 'VENDOR_AVAILABILITY',
+          productName: orderData.productName,
+          quantity: orderData.quantity,
+          availableVendorsCount: availableVendors.length,
+        });
+
         if (availableVendors.length === 0) {
+          console.log('❌ [WEBHOOK] No vendors available - checking alternatives');
+          
           // Get price comparison for alternatives
           const priceComparison = await vendorInventoryService.getPriceComparison(
             orderData.productName
@@ -267,13 +324,23 @@ Reply YES to confirm this alternative.`;
           return await this.sendWhatsAppMessage(phoneNumber, alternativeMessage);
         }
 
+        console.log('✅ [WEBHOOK] Vendors available - proceeding with order creation');
         return await this.handleParsedOrder(phoneNumber, orderData);
       }
 
-      // Check if user is new (no previous orders or messages)
+      // ============================================================================
+      // STRUCTURED LOGGING - Step 6: Check if New User
+      // ============================================================================
+      console.log('🔍 [WEBHOOK] Not an order - checking if new user');
       const isNewUser = await this.isNewUser(phoneNumber);
+      console.log('👤 [WEBHOOK] User status check:', {
+        step: 'USER_STATUS_CHECK',
+        phoneNumber,
+        isNewUser,
+      });
       
       if (isNewUser) {
+        console.log('👋 [WEBHOOK] New user detected - sending welcome message');
         return await this.sendWhatsAppMessage(
           phoneNumber,
           `👋 *Welcome to Khaacho B2B Marketplace!*
@@ -291,17 +358,39 @@ Visit our app: ${process.env.APP_URL || 'https://khaacho.onrender.com'}`
         );
       }
 
-      // Check credit status before allowing orders
+      // ============================================================================
+      // STRUCTURED LOGGING - Step 7: Check Credit Status
+      // ============================================================================
+      console.log('🔍 [WEBHOOK] Existing user - checking credit status');
       try {
         const user = await prisma.user.findUnique({
           where: { phoneNumber },
           include: { retailerProfile: true }
         });
 
+        console.log('👤 [WEBHOOK] User lookup result:', {
+          step: 'USER_LOOKUP',
+          phoneNumber,
+          userFound: !!user,
+          userId: user?.id,
+          role: user?.role,
+          hasRetailerProfile: !!user?.retailerProfile,
+          retailerId: user?.retailerProfile?.id,
+        });
+
         if (user?.retailerProfile) {
           const creditStatus = await creditControlService.getRetailerCreditStatus(user.retailerProfile.id);
           
+          console.log('💳 [WEBHOOK] Credit status check:', {
+            step: 'CREDIT_STATUS_CHECK',
+            retailerId: user.retailerProfile.id,
+            isBlocked: creditStatus.isBlocked,
+            creditUtilization: creditStatus.creditUtilization?.toString(),
+            creditAvailable: creditStatus.creditAvailable?.toString(),
+          });
+          
           if (creditStatus.isBlocked) {
+            console.log('🚫 [WEBHOOK] Account blocked - sending blocked message');
             return await this.sendWhatsAppMessage(
               phoneNumber,
               `❌ *Account Blocked*
@@ -316,6 +405,7 @@ Support: ${process.env.SUPPORT_PHONE || '+977-9800000000'}`
 
           // Send credit limit warning if near limit
           if (creditStatus.creditUtilization && creditStatus.creditUtilization.gte(90)) {
+            console.log('⚠️ [WEBHOOK] Credit limit warning - sending warning message');
             return await this.sendWhatsAppMessage(
               phoneNumber,
               `⚠️ *Credit Limit Warning*
@@ -331,9 +421,24 @@ Thank you for your business! 🙏`
           }
         }
       } catch (creditError) {
-        console.error('Error checking credit status', { error: creditError.message });
+        console.error('❌ [WEBHOOK] Error checking credit status:', {
+          step: 'CREDIT_CHECK_ERROR',
+          error: creditError.message,
+          stack: creditError.stack,
+        });
+        logger.error('Error checking credit status', { error: creditError.message });
         // Continue with normal flow if credit check fails
       }
+
+      // ============================================================================
+      // STRUCTURED LOGGING - Step 8: Default Fallback Message
+      // ============================================================================
+      console.log('💬 [WEBHOOK] Sending default help message (fallback):', {
+        step: 'DEFAULT_FALLBACK',
+        reason: 'No specific condition matched',
+        phoneNumber,
+        messageBody: body,
+      });
 
       // Default response for existing users
       return await this.sendWhatsAppMessage(
@@ -348,6 +453,14 @@ To place an order, send:
 Type "help" for more options.`
       );
     } catch (error) {
+      console.error('❌ [WEBHOOK] Fatal error processing message:', {
+        step: 'FATAL_ERROR',
+        phoneNumber,
+        error: error.message,
+        stack: error.stack,
+        isPrismaError: error.code?.startsWith('P'),
+      });
+      
       logger.error('Error processing incoming WhatsApp message', {
         from: phoneNumber,
         error: error.message,
@@ -363,6 +476,10 @@ Type "help" for more options.`
         );
         return { success: false, error: error.message, replySent: true };
       } catch (sendError) {
+        console.error('❌ [WEBHOOK] Failed to send error message:', {
+          error: sendError.message,
+          code: sendError.code,
+        });
         logger.error('Failed to send error message', {
           error: sendError.message,
           code: sendError.code
@@ -667,31 +784,82 @@ We'll keep you in mind for future orders.`
 
   // Parse order message to extract quantity and product name
   parseOrderMessage(message) {
+    console.log('🔍 [PARSER] Starting order message parsing:', {
+      function: 'parseOrderMessage',
+      message,
+      messageType: typeof message,
+      messageLength: message?.length,
+    });
+
     if (!message || typeof message !== 'string') {
+      console.log('❌ [PARSER] Invalid message type:', {
+        message,
+        type: typeof message,
+        result: 'NOT_AN_ORDER',
+      });
       return { isOrder: false };
     }
 
     const trimmedMessage = message.trim().toLowerCase();
+    console.log('🔍 [PARSER] Trimmed message:', {
+      original: message,
+      trimmed: trimmedMessage,
+      length: trimmedMessage.length,
+    });
     
     // Pattern to match: number + optional unit + product name
     // Examples: "10kg rice", "5 coke", "2 oil", "1 dozen eggs"
     const orderPattern = /^(\d+(?:\.\d+)?)\s*([a-zA-Z]*)\s*([a-zA-Z\s]+)$/;
     const match = trimmedMessage.match(orderPattern);
     
+    console.log('🔍 [PARSER] Regex match result:', {
+      pattern: orderPattern.toString(),
+      matched: !!match,
+      matchGroups: match ? {
+        full: match[0],
+        quantity: match[1],
+        unit: match[2],
+        productName: match[3],
+      } : null,
+    });
+    
     if (match) {
       const quantity = parseFloat(match[1]);
       const unit = match[2] || '';
       const productName = match[3].trim();
       
+      console.log('✅ [PARSER] Order components extracted:', {
+        quantity,
+        unit,
+        productName,
+        isValidQuantity: quantity > 0,
+        isValidProductName: productName.length > 0,
+      });
+      
       if (quantity > 0 && productName.length > 0) {
-        return {
+        const result = {
           isOrder: true,
           quantity: quantity,
           unit: unit,
           productName: productName,
           originalMessage: message.trim()
         };
+        
+        console.log('✅ [PARSER] Valid order parsed:', JSON.stringify(result, null, 2));
+        return result;
+      } else {
+        console.log('❌ [PARSER] Invalid order components:', {
+          quantity,
+          productName,
+          reason: quantity <= 0 ? 'Invalid quantity' : 'Empty product name',
+        });
       }
+    } else {
+      console.log('❌ [PARSER] Message does not match order pattern:', {
+        trimmedMessage,
+        pattern: orderPattern.toString(),
+        examples: ['10kg rice', '5 coke', '2 oil'],
+      });
     }
     
     return { isOrder: false };
@@ -699,13 +867,28 @@ We'll keep you in mind for future orders.`
 
   // Check if user is new (no previous orders or messages)
   async isNewUser(phoneNumber) {
+    console.log('🔍 [USER_CHECK] Checking if user is new:', {
+      function: 'isNewUser',
+      phoneNumber,
+    });
+
     try {
       const user = await prisma.user.findUnique({
         where: { phoneNumber },
         include: { retailerProfile: true }
       });
       
+      console.log('👤 [USER_CHECK] User lookup result:', {
+        phoneNumber,
+        userFound: !!user,
+        userId: user?.id,
+        role: user?.role,
+        hasRetailerProfile: !!user?.retailerProfile,
+        retailerId: user?.retailerProfile?.id,
+      });
+      
       if (!user) {
+        console.log('❌ [USER_CHECK] User not found in database - treating as new user');
         return true;
       }
       
@@ -714,8 +897,21 @@ We'll keep you in mind for future orders.`
         where: { retailerId: user.retailerProfile?.id }
       });
       
+      console.log('📊 [USER_CHECK] Order count check:', {
+        phoneNumber,
+        userId: user.id,
+        retailerId: user.retailerProfile?.id,
+        orderCount,
+        isNewUser: orderCount === 0,
+      });
+      
       return orderCount === 0;
     } catch (error) {
+      console.error('❌ [USER_CHECK] Error checking if user is new:', {
+        phoneNumber,
+        error: error.message,
+        stack: error.stack,
+      });
       logger.error('Error checking if user is new', { error: error.message });
       return false;
     }

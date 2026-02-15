@@ -158,31 +158,289 @@ class WhatsAppService {
 
     whatsappLogger.info('Incoming WhatsApp message', { from, text });
 
-    // Check if it's an order status query
-    const orderNumberMatch = text.match(/(?:order|status|track)\s*#?([A-Z0-9]+)/i);
-    if (orderNumberMatch) {
-      const WhatsAppOrderParser = require('./whatsappOrderParser.service');
-      const response = await WhatsAppOrderParser.handleOrderStatusQuery(from, orderNumberMatch[1]);
-      await this.sendMessage(from, response);
-      return;
-    }
+    // Detect intent using intent detection service
+    const intentDetectionService = require('./whatsappIntentDetection.service');
+    const intentResult = await intentDetectionService.detectIntent({
+      phoneNumber: from,
+      messageText: text,
+      messageId,
+    });
 
-    // Check if message contains order items
-    if (this.looksLikeOrder(text)) {
-      const WhatsAppOrderParser = require('./whatsappOrderParser.service');
-      const result = await WhatsAppOrderParser.parseAndCreateOrder({
-        from,
-        text,
-        messageId,
+    logger.info('Intent detected', {
+      from,
+      intent: intentResult.intent,
+      confidence: intentResult.confidence,
+    });
+
+    // Handle based on detected intent
+    switch (intentResult.intent) {
+      case 'place_order':
+        await this.handleOrderIntent(from, text, messageId, intentResult);
+        break;
+
+      case 'order_status':
+        await this.handleOrderStatusIntent(from, text, intentResult);
+        break;
+
+      case 'greeting':
+        await this.handleGreetingIntent(from, intentResult);
+        break;
+
+      case 'help':
+        await this.handleHelpIntent(from, intentResult);
+        break;
+
+      case 'unknown':
+      default:
+        // Only send help if truly unclear
+        if (intentResult.shouldSendHelp) {
+          await this.handleHelpIntent(from, intentResult);
+        } else {
+          // Try to process as order anyway (might contain items)
+          await this.handleOrderIntent(from, text, messageId, intentResult);
+        }
+        break;
+    }
+  }
+
+  async handleOrderIntent(from, text, messageId, intentResult) {
+    try {
+      const unifiedOrderParser = require('./unifiedOrderParser.service');
+      const safeModeService = require('./safeMode.service');
+      
+      // Find retailer
+      const retailer = await prisma.retailers.findFirst({
+        where: {
+          user: {
+            phoneNumber: from,
+          },
+        },
       });
 
-      if (!result.success) {
-        await this.sendMessage(from, result.message);
+      if (!retailer) {
+        await this.sendMessage(
+          from,
+          '❌ Retailer account not found. Please contact support to register.'
+        );
+        return;
       }
-    } else {
+
+      // Check if safe mode is enabled
+      const safeModeEnabled = await safeModeService.isEnabled();
+      
+      if (safeModeEnabled) {
+        // Queue order during safe mode
+        await safeModeService.queueOrder({
+          retailerId: retailer.id,
+          phoneNumber: from,
+          orderText: text,
+          orderData: { messageId, intentResult },
+          source: 'whatsapp',
+          messageId,
+        });
+
+        // Send auto-reply
+        const status = await safeModeService.getStatus();
+        const autoReplyMessage = safeModeService.getAutoReplyMessage(
+          status?.custom_message
+        );
+        
+        await this.sendMessage(from, autoReplyMessage);
+        
+        logger.info('Order queued during safe mode', {
+          retailerId: retailer.id,
+          phoneNumber: from,
+          messageId,
+        });
+        
+        return;
+      }
+
+      // Parse order using unified parser
+      const parseResult = await unifiedOrderParser.parseOrder({
+        source: 'whatsapp',
+        rawText: text,
+        retailerId: retailer.id,
+      });
+
+      if (!parseResult.success || parseResult.items.length === 0) {
+        await this.sendMessage(
+          from,
+          '❌ Could not parse order items. Please send items in format:\n\nRICE-1KG x 10\nDAL-1KG x 5\n\nOr type "help" for more options.'
+        );
+        return;
+      }
+
+      // Generate summary message
+      let message = '📋 Order Summary:\n\n';
+      
+      const matchedItems = parseResult.items.filter(i => i.productId);
+      matchedItems.forEach((item, index) => {
+        const itemTotal = item.quantity * item.unitPrice;
+        message += `${index + 1}. ${item.productName}\n`;
+        message += `   Qty: ${item.quantity} ${item.unit || ''}\n`;
+        message += `   Price: Rs.${item.unitPrice} × ${item.quantity} = Rs.${itemTotal}\n`;
+        
+        if (item.confidence < 100) {
+          message += `   ⚠️ ${item.confidence}% match\n`;
+        }
+        message += '\n';
+      });
+
+      message += `Subtotal: Rs.${parseResult.summary.subtotal}\n`;
+      message += `Tax (13%): Rs.${parseResult.summary.tax}\n`;
+      message += `Total: Rs.${parseResult.summary.total}\n`;
+
+      // Check if needs clarification
+      if (parseResult.needsClarification) {
+        message += '\n' + parseResult.clarificationMessage;
+        
+        // Store pending order data
+        const intentDetectionService = require('./whatsappIntentDetection.service');
+        await intentDetectionService.setPendingAction(from, 'confirm_order', {
+          parsingId: parseResult.parsingId,
+          items: matchedItems,
+          summary: parseResult.summary,
+        });
+      } else {
+        message += '\n\n✅ Reply "CONFIRM" to place order or "CANCEL" to cancel.';
+        
+        // Store pending order data
+        const intentDetectionService = require('./whatsappIntentDetection.service');
+        await intentDetectionService.setPendingAction(from, 'confirm_order', {
+          parsingId: parseResult.parsingId,
+          items: matchedItems,
+          summary: parseResult.summary,
+        });
+      }
+
+      await this.sendMessage(from, message);
+    } catch (error) {
+      logger.error('Failed to handle order intent', {
+        from,
+        error: error.message,
+        stack: error.stack,
+      });
+
       await this.sendMessage(
         from,
-        `Welcome to Khaacho! 🛒\n\nTo place an order, send:\nSKU x Quantity\n\nExample:\nRICE-1KG x 10\nDAL-1KG x 5\n\nTo check order status:\nOrder #ORD260100001`
+        '❌ Sorry, there was an error processing your order. Please try again or contact support.'
+      );
+    }
+  }
+
+  async handleOrderStatusIntent(from, text, intentResult) {
+    try {
+      // Extract order number
+      const orderNumberMatch = text.match(/(?:order|#)?\s*([A-Z]{3}\d+)/i);
+      
+      if (!orderNumberMatch) {
+        await this.sendMessage(
+          from,
+          '📋 To check order status, send:\n\nOrder #ORD260100001\n\nOr: Status ORD260100001'
+        );
+        return;
+      }
+
+      const orderNumber = orderNumberMatch[1].toUpperCase();
+
+      // Find order
+      const order = await prisma.orders.findFirst({
+        where: {
+          orderNumber,
+          retailer: {
+            user: {
+              phoneNumber: from,
+            },
+          },
+        },
+        include: {
+          vendor: {
+            include: {
+              user: true,
+            },
+          },
+        },
+      });
+
+      if (!order) {
+        await this.sendMessage(
+          from,
+          `❌ Order ${orderNumber} not found or doesn't belong to you.`
+        );
+        return;
+      }
+
+      // Generate status message
+      let message = `📦 Order Status\n\n`;
+      message += `Order #: ${order.orderNumber}\n`;
+      message += `Status: ${order.status}\n`;
+      message += `Vendor: ${order.vendor?.user.businessName || 'TBD'}\n`;
+      message += `Total: Rs.${order.total}\n`;
+      message += `Created: ${order.createdAt.toLocaleDateString()}\n`;
+
+      if (order.confirmedAt) {
+        message += `Confirmed: ${order.confirmedAt.toLocaleDateString()}\n`;
+      }
+      if (order.dispatchedAt) {
+        message += `Dispatched: ${order.dispatchedAt.toLocaleDateString()}\n`;
+      }
+      if (order.deliveredAt) {
+        message += `Delivered: ${order.deliveredAt.toLocaleDateString()}\n`;
+      }
+
+      await this.sendMessage(from, message);
+    } catch (error) {
+      logger.error('Failed to handle order status intent', {
+        from,
+        error: error.message,
+        stack: error.stack,
+      });
+
+      await this.sendMessage(
+        from,
+        '❌ Sorry, there was an error checking order status. Please try again.'
+      );
+    }
+  }
+
+  async handleGreetingIntent(from, intentResult) {
+    try {
+      const intentDetectionService = require('./whatsappIntentDetection.service');
+      const conversation = await intentDetectionService.getConversation(from);
+      
+      const hasHistory = conversation && conversation.message_count > 1;
+      const message = intentDetectionService.generateGreetingResponse(hasHistory);
+      
+      await this.sendMessage(from, message);
+    } catch (error) {
+      logger.error('Failed to handle greeting intent', {
+        from,
+        error: error.message,
+      });
+
+      await this.sendMessage(from, 'Hello! 👋 Type "help" for instructions.');
+    }
+  }
+
+  async handleHelpIntent(from, intentResult) {
+    try {
+      const intentDetectionService = require('./whatsappIntentDetection.service');
+      const message = intentDetectionService.generateHelpMessage();
+      
+      await this.sendMessage(from, message);
+      
+      // Increment help requests metric
+      await intentDetectionService.incrementMetric(from, 'help_requests');
+    } catch (error) {
+      logger.error('Failed to handle help intent', {
+        from,
+        error: error.message,
+      });
+
+      await this.sendMessage(
+        from,
+        'Welcome to Khaacho! 🛒\n\nSend items to order:\nRICE-1KG x 10\n\nType "help" for more options.'
       );
     }
   }

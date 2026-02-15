@@ -60,7 +60,7 @@ services:
   - type: web
     name: khaacho-api
     env: node  # Native Node.js (not Docker)
-    buildCommand: npm install && npx prisma generate
+    buildCommand: npm install && npx prisma generate && npx prisma migrate deploy
     startCommand: npm start
     healthCheckPath: /api/health
 ```
@@ -69,6 +69,7 @@ services:
 - ✅ `env: node` (not `env: docker`)
 - ✅ No Dockerfile references
 - ✅ Native npm commands
+- ✅ **Migrations run automatically** during build
 
 ---
 
@@ -110,7 +111,7 @@ services:
    - Configure:
      - **Name**: khaacho-api
      - **Environment**: Node
-     - **Build Command**: `npm install && npx prisma generate`
+     - **Build Command**: `npm install && npx prisma generate && npx prisma migrate deploy`
      - **Start Command**: `npm start`
      - **Health Check Path**: `/api/health`
 
@@ -176,6 +177,59 @@ ENABLE_METRICS=true
 ENABLE_BACKGROUND_JOBS=false  # true for worker service
 ASYNC_NOTIFICATIONS=true
 ```
+
+---
+
+## Database Migrations
+
+### Automatic Migration on Deploy
+
+Migrations run automatically during build:
+
+```bash
+npm install && npx prisma generate && npx prisma migrate deploy
+```
+
+This ensures:
+1. All pending migrations are applied
+2. Database schema is up to date
+3. App starts with correct schema
+
+### Verify Migrations After Deploy
+
+```bash
+# Run verification script
+npm run db:migrate:verify
+```
+
+Expected output:
+```
+✅ Found 25 applied migrations in database
+✅ All migrations verified successfully!
+✅ Database schema is up to date
+```
+
+### Manual Migration (if needed)
+
+If automatic migrations fail:
+
+```bash
+# In Render Shell (Dashboard → Service → Shell)
+npx prisma migrate deploy
+
+# Or connect locally
+export DATABASE_URL="your-render-database-url"
+npx prisma migrate deploy
+```
+
+### Troubleshooting Migrations
+
+See detailed guide: [RUN_MIGRATIONS_ON_RENDER.md](./RUN_MIGRATIONS_ON_RENDER.md)
+
+Common issues:
+- **"relation does not exist"** → Migrations didn't run, check build logs
+- **"Migration failed"** → Check migration SQL syntax
+- **"Connection timeout"** → Verify DATABASE_URL is correct
 
 ---
 

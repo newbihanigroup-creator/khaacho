@@ -14,9 +14,30 @@ const requiredEnvVars = ['DATABASE_URL', 'JWT_SECRET'];
 const missingEnvVars = requiredEnvVars.filter(varName => !process.env[varName]);
 
 if (missingEnvVars.length > 0) {
-  const errorMsg = `Missing required environment variables: ${missingEnvVars.join(', ')}`;
-  console.error('[FATAL CONFIG ERROR]', errorMsg);
-  throw new Error(errorMsg);
+  const errorMsg = `
+╔════════════════════════════════════════════════════════════════╗
+║                  CONFIGURATION ERROR                           ║
+╚════════════════════════════════════════════════════════════════╝
+
+Missing required environment variables: ${missingEnvVars.join(', ')}
+
+Required variables:
+  - DATABASE_URL: PostgreSQL connection string
+  - JWT_SECRET: Secret key for JWT tokens (min 32 characters)
+
+Please check:
+  1. .env file exists in project root
+  2. All required variables are set
+  3. No typos in variable names
+
+Example .env file:
+  DATABASE_URL="postgresql://user:password@localhost:5432/khaacho"
+  JWT_SECRET="your-super-secret-jwt-key-change-in-production"
+
+See .env.example for complete reference.
+`;
+  console.error(errorMsg);
+  throw new Error(`Missing required environment variables: ${missingEnvVars.join(', ')}`);
 }
 
 module.exports = {

@@ -6,6 +6,11 @@ const config = require('../config');
 /**
  * Security Middleware
  * Provides rate limiting, webhook verification, and security headers
+ * 
+ * IMPORTANT: Proxy Configuration
+ * - Express app must have 'trust proxy' set to 1
+ * - This allows rate limiters to read real client IP from X-Forwarded-For
+ * - Without trust proxy, all requests appear to come from the proxy's IP
  */
 
 // ============================================================================
@@ -13,7 +18,25 @@ const config = require('../config');
 // ============================================================================
 
 /**
+ * Get client IP from request
+ * Reads from X-Forwarded-For header when behind proxy
+ * 
+ * @param {Object} req - Express request object
+ * @returns {string} Client IP address
+ */
+function getClientIP(req) {
+  // When trust proxy is enabled, req.ip contains the real client IP
+  // Express automatically parses X-Forwarded-For header
+  return req.ip || req.connection.remoteAddress || 'unknown';
+}
+
+/**
  * General API rate limiter
+ * 
+ * Configuration:
+ * - 100 requests per 15 minutes per IP
+ * - Uses X-Forwarded-For header (via trust proxy)
+ * - Prevents API abuse and DDoS attacks
  */
 const apiLimiter = rateLimit({
   windowMs: config.rateLimit.windowMs || 15 * 60 * 1000, // 15 minutes
@@ -22,16 +45,26 @@ const apiLimiter = rateLimit({
     success: false,
     message: 'Too many requests from this IP, please try again later',
   },
-  standardHeaders: true,
-  legacyHeaders: false,
-  // Trust proxy is set at app level
-  validate: { trustProxy: false },
+  standardHeaders: true, // Return rate limit info in headers
+  legacyHeaders: false, // Disable X-RateLimit-* headers
+  
+  // Key generator: Use client IP for rate limiting
+  // This works correctly when trust proxy is enabled
+  keyGenerator: (req) => {
+    return getClientIP(req);
+  },
+  
+  // Custom handler for rate limit exceeded
   handler: (req, res) => {
+    const clientIP = getClientIP(req);
+    
     logger.warn('Rate limit exceeded', {
-      ip: req.ip,
+      ip: clientIP,
       path: req.path,
       method: req.method,
+      forwardedFor: req.headers['x-forwarded-for'],
     });
+    
     res.status(429).json({
       success: false,
       message: 'Too many requests, please try again later',
@@ -41,21 +74,35 @@ const apiLimiter = rateLimit({
 
 /**
  * Strict rate limiter for auth endpoints
+ * 
+ * Configuration:
+ * - 5 login attempts per 15 minutes per IP
+ * - Skips successful requests (only counts failures)
+ * - Prevents brute force attacks
  */
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
   max: 5, // 5 attempts
-  skipSuccessfulRequests: true,
+  skipSuccessfulRequests: true, // Only count failed login attempts
   message: {
     success: false,
     message: 'Too many login attempts, please try again later',
   },
-  validate: { trustProxy: false },
+  
+  // Key generator: Use client IP for rate limiting
+  keyGenerator: (req) => {
+    return getClientIP(req);
+  },
+  
   handler: (req, res) => {
+    const clientIP = getClientIP(req);
+    
     logger.warn('Auth rate limit exceeded', {
-      ip: req.ip,
+      ip: clientIP,
       email: req.body.email,
+      forwardedFor: req.headers['x-forwarded-for'],
     });
+    
     res.status(429).json({
       success: false,
       message: 'Too many login attempts, account temporarily locked',
@@ -65,6 +112,10 @@ const authLimiter = rateLimit({
 
 /**
  * Webhook rate limiter
+ * 
+ * Configuration:
+ * - 100 webhooks per minute per IP
+ * - Prevents webhook flooding
  */
 const webhookLimiter = rateLimit({
   windowMs: 1 * 60 * 1000, // 1 minute
@@ -73,11 +124,19 @@ const webhookLimiter = rateLimit({
     success: false,
     message: 'Webhook rate limit exceeded',
   },
-  validate: { trustProxy: false },
+  
+  // Key generator: Use client IP for rate limiting
+  keyGenerator: (req) => {
+    return getClientIP(req);
+  },
 });
 
 /**
  * Admin action rate limiter
+ * 
+ * Configuration:
+ * - 30 admin actions per minute per IP
+ * - Prevents admin action abuse
  */
 const adminLimiter = rateLimit({
   windowMs: 1 * 60 * 1000, // 1 minute
@@ -86,7 +145,11 @@ const adminLimiter = rateLimit({
     success: false,
     message: 'Too many admin actions, please slow down',
   },
-  validate: { trustProxy: false },
+  
+  // Key generator: Use client IP for rate limiting
+  keyGenerator: (req) => {
+    return getClientIP(req);
+  },
 });
 
 // ============================================================================
@@ -217,15 +280,20 @@ function securityHeaders(req, res, next) {
 
 /**
  * IP whitelist middleware
+ * Only allows requests from specified IP addresses
+ * 
+ * @param {Array<string>} allowedIPs - Array of allowed IP addresses
+ * @returns {Function} Express middleware
  */
 function ipWhitelist(allowedIPs) {
   return (req, res, next) => {
-    const clientIP = req.ip || req.connection.remoteAddress;
+    const clientIP = getClientIP(req);
     
     if (!allowedIPs.includes(clientIP)) {
       logger.warn('IP not whitelisted', {
         ip: clientIP,
         path: req.path,
+        forwardedFor: req.headers['x-forwarded-for'],
       });
       return res.status(403).json({
         success: false,
@@ -239,15 +307,20 @@ function ipWhitelist(allowedIPs) {
 
 /**
  * IP blacklist middleware
+ * Blocks requests from specified IP addresses
+ * 
+ * @param {Array<string>} blockedIPs - Array of blocked IP addresses
+ * @returns {Function} Express middleware
  */
 function ipBlacklist(blockedIPs) {
   return (req, res, next) => {
-    const clientIP = req.ip || req.connection.remoteAddress;
+    const clientIP = getClientIP(req);
     
     if (blockedIPs.includes(clientIP)) {
       logger.warn('Blocked IP attempted access', {
         ip: clientIP,
         path: req.path,
+        forwardedFor: req.headers['x-forwarded-for'],
       });
       return res.status(403).json({
         success: false,

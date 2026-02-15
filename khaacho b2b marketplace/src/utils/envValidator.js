@@ -180,7 +180,8 @@ function validateEnvironment() {
 
   // Redis-specific conditional check
   if (!process.env.REDIS_URL && (!process.env.REDIS_HOST || !process.env.REDIS_PORT)) {
-    errors.push('Either REDIS_URL or both REDIS_HOST and REDIS_PORT must be provided');
+    warnings.push('Redis not configured: Either REDIS_URL or both REDIS_HOST and REDIS_PORT should be provided');
+    warnings.push('App will run in synchronous mode without background job queues');
   }
 
   // Production-specific checks

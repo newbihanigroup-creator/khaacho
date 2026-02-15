@@ -17,6 +17,10 @@ enum UserRole {
 }
 
 enum OrderStatus {
+  RECEIVED
+  PARSED
+  ROUTED
+  SENT_TO_VENDOR
   PLACED
   PENDING
   ACCEPTED
@@ -26,6 +30,7 @@ enum OrderStatus {
   DELIVERED
   COMPLETED
   CANCELLED
+  FAILED
 }
 
 enum PaymentStatus {
@@ -245,11 +250,13 @@ model Retailer {
   deletedAt       DateTime? @map("deleted_at")
 
   // Relations
-  orders        Order[]
-  creditLedgers CreditLedger[]
-  payments      Payment[]
-  riskProfile   RetailerRiskProfile?
-  invoices      Invoice[]
+  orders         Order[]
+  creditLedgers  CreditLedger[]
+  payments       Payment[]
+  riskProfile    RetailerRiskProfile?
+  invoices       Invoice[]
+  uploadedOrders UploadedOrder[]
+  rejectedOrders RejectedOrder[] @relation("RejectedOrders")
 
   @@index([retailerCode])
   @@index([creditScore])
@@ -395,6 +402,7 @@ model Order {
   payments           Payment[]
   statusLogs         OrderStatusLog[]
   broadcastLogs      OrderBroadcastLog[]
+  uploadedOrders     UploadedOrder[]
 
   @@index([retailerId, createdAt(sort: Desc)])
   @@index([vendorId, createdAt(sort: Desc)])
@@ -862,4 +870,90 @@ model VendorSettlement {
   @@index([status])
   @@index([settlementDate])
   @@map("vendor_settlements")
+}
+
+enum UploadedOrderStatus {
+  PROCESSING
+  COMPLETED
+  FAILED
+  PENDING_REVIEW
+}
+
+model UploadedOrder {
+  id            String              @id @default(uuid())
+  retailerId    String?             @map("retailer_id")
+  retailer      Retailer?           @relation(fields: [retailerId], references: [id], onDelete: SetNull)
+  imageUrl      String              @map("image_url")
+  imageKey      String              @map("image_key")
+  status        UploadedOrderStatus @default(PROCESSING)
+  extractedText String?             @map("extracted_text") @db.Text
+  parsedData    Json?               @map("parsed_data")
+  orderId       String?             @map("order_id")
+  order         Order?              @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  errorMessage  String?             @map("error_message")
+  processedAt   DateTime?           @map("processed_at")
+  createdAt     DateTime            @default(now()) @map("created_at")
+  updatedAt     DateTime            @updatedAt @map("updated_at")
+
+  @@index([retailerId])
+  @@index([status])
+  @@index([createdAt(sort: Desc)])
+  @@index([orderId])
+  @@map("uploaded_orders")
+}
+
+model RejectedOrder {
+  id                String    @id @default(uuid())
+  retailerId        String    @map("retailer_id")
+  retailer          Retailer  @relation("RejectedOrders", fields: [retailerId], references: [id], onDelete: Cascade)
+  orderData         Json      @map("order_data")
+  rejectionReason   String    @map("rejection_reason")
+  rejectionMessage  String    @map("rejection_message")
+  requestedAmount   Decimal   @default(0) @map("requested_amount") @db.Decimal(15, 2)
+  availableCredit   Decimal   @default(0) @map("available_credit") @db.Decimal(15, 2)
+  shortfall         Decimal?  @map("shortfall") @db.Decimal(15, 2)
+  metadata          Json?
+  isReviewed        Boolean   @default(false) @map("is_reviewed")
+  reviewedAt        DateTime? @map("reviewed_at")
+  reviewedBy        String?   @map("reviewed_by")
+  reviewNotes       String?   @map("review_notes")
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
+
+  @@index([retailerId, createdAt(sort: Desc)])
+  @@index([rejectionReason])
+  @@index([isReviewed, createdAt(sort: Desc)])
+  @@index([createdAt(sort: Desc)])
+  @@index([reviewedBy])
+  @@map("rejected_orders")
+}
+
+enum WhatsAppDeliveryStatus {
+  PENDING
+  RESOLVED
+  FAILED
+}
+
+model WhatsAppDeliveryFailure {
+  id              String                  @id @default(uuid())
+  phoneNumber     String                  @map("phone_number")
+  message         String
+  idempotencyKey  String                  @map("idempotency_key")
+  errorMessage    String?                 @map("error_message")
+  errorCode       String?                 @map("error_code")
+  attemptCount    Int                     @default(1) @map("attempt_count")
+  status          WhatsAppDeliveryStatus  @default(PENDING)
+  metadata        Json?
+  nextRetryAt     DateTime?               @map("next_retry_at")
+  lastAttemptAt   DateTime?               @map("last_attempt_at")
+  resolvedAt      DateTime?               @map("resolved_at")
+  createdAt       DateTime                @default(now()) @map("created_at")
+  updatedAt       DateTime                @updatedAt @map("updated_at")
+
+  @@index([phoneNumber])
+  @@index([status, nextRetryAt])
+  @@index([idempotencyKey])
+  @@index([createdAt(sort: Desc)])
+  @@index([status, nextRetryAt, attemptCount])
+  @@map("whatsapp_delivery_failures")
 }

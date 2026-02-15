@@ -1,11 +1,13 @@
 const { queueManager } = require('./queueManager');
 const SyncFallback = require('./syncFallback');
+const { getQueueConfig } = require('./productionQueueConfig');
 const whatsappProcessor = require('./processors/whatsappProcessor');
 const creditScoreProcessor = require('./processors/creditScoreProcessor');
 const orderRoutingProcessor = require('./processors/orderRoutingProcessor');
 const paymentReminderProcessor = require('./processors/paymentReminderProcessor');
 const reportGenerationProcessor = require('./processors/reportGenerationProcessor');
 const orderProcessingProcessor = require('./processors/orderProcessingProcessor');
+const imageProcessingProcessor = require('./processors/imageProcessingProcessor');
 const logger = require('../utils/logger');
 
 let activeQueueManager = null;
@@ -38,47 +40,61 @@ function initializeQueues() {
       }
     }
 
-    // Register processors with concurrency settings
+    // Register processors with production concurrency settings
     try {
-      activeQueueManager.registerProcessor('WHATSAPP', whatsappProcessor, 5);
-      logger.info('WhatsApp queue processor registered');
+      const whatsappConfig = getQueueConfig('whatsapp-messages');
+      activeQueueManager.registerProcessor('WHATSAPP', whatsappProcessor, whatsappConfig.concurrency);
+      logger.info(`WhatsApp queue processor registered (concurrency: ${whatsappConfig.concurrency})`);
     } catch (error) {
       logger.error('Failed to register WhatsApp processor', { error: error.message });
     }
 
     try {
-      activeQueueManager.registerProcessor('CREDIT_SCORE', creditScoreProcessor, 2);
-      logger.info('Credit score queue processor registered');
+      const creditConfig = getQueueConfig('credit-score-calculation');
+      activeQueueManager.registerProcessor('CREDIT_SCORE', creditScoreProcessor, creditConfig.concurrency);
+      logger.info(`Credit score queue processor registered (concurrency: ${creditConfig.concurrency})`);
     } catch (error) {
       logger.error('Failed to register credit score processor', { error: error.message });
     }
 
     try {
-      activeQueueManager.registerProcessor('ORDER_ROUTING', orderRoutingProcessor, 3);
-      logger.info('Order routing queue processor registered');
+      const routingConfig = getQueueConfig('order-routing');
+      activeQueueManager.registerProcessor('ORDER_ROUTING', orderRoutingProcessor, routingConfig.concurrency);
+      logger.info(`Order routing queue processor registered (concurrency: ${routingConfig.concurrency})`);
     } catch (error) {
       logger.error('Failed to register order routing processor', { error: error.message });
     }
 
     try {
-      activeQueueManager.registerProcessor('PAYMENT_REMINDERS', paymentReminderProcessor, 3);
-      logger.info('Payment reminders queue processor registered');
+      const reminderConfig = getQueueConfig('payment-reminders');
+      activeQueueManager.registerProcessor('PAYMENT_REMINDERS', paymentReminderProcessor, reminderConfig.concurrency);
+      logger.info(`Payment reminders queue processor registered (concurrency: ${reminderConfig.concurrency})`);
     } catch (error) {
       logger.error('Failed to register payment reminders processor', { error: error.message });
     }
 
     try {
-      activeQueueManager.registerProcessor('REPORT_GENERATION', reportGenerationProcessor, 1);
-      logger.info('Report generation queue processor registered');
+      const reportConfig = getQueueConfig('report-generation');
+      activeQueueManager.registerProcessor('REPORT_GENERATION', reportGenerationProcessor, reportConfig.concurrency);
+      logger.info(`Report generation queue processor registered (concurrency: ${reportConfig.concurrency})`);
     } catch (error) {
       logger.error('Failed to register report generation processor', { error: error.message });
     }
 
     try {
-      activeQueueManager.registerProcessor('ORDER_PROCESSING', orderProcessingProcessor, 5);
-      logger.info('Order processing queue processor registered');
+      const orderConfig = getQueueConfig('order-processing');
+      activeQueueManager.registerProcessor('ORDER_PROCESSING', orderProcessingProcessor, orderConfig.concurrency);
+      logger.info(`Order processing queue processor registered (concurrency: ${orderConfig.concurrency})`);
     } catch (error) {
       logger.error('Failed to register order processing processor', { error: error.message });
+    }
+
+    try {
+      const imageConfig = getQueueConfig('image-processing');
+      activeQueueManager.registerProcessor('IMAGE_PROCESSING', imageProcessingProcessor, imageConfig.concurrency);
+      logger.info(`Image processing queue processor registered (concurrency: ${imageConfig.concurrency})`);
+    } catch (error) {
+      logger.error('Failed to register image processing processor', { error: error.message });
     }
 
     logger.info('All job queues initialized successfully');

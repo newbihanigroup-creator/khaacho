@@ -563,6 +563,170 @@ class VendorPerformanceService {
       throw error;
     }
   }
+
+  /**
+   * Get top reliable wholesalers (vendors) for a specific product
+   * @param {string} productId - Product ID to find vendors for
+   * @param {number} limit - Maximum number of vendors to return (default: 5)
+   * @returns {Promise<Array>} Array of top vendors sorted by reliability score
+   */
+  async getTopReliableWholesellers(productId, limit = 5) {
+    try {
+      logger.info('🔍 Finding top reliable wholesalers for product', {
+        productId,
+        limit,
+      });
+
+      // Query vendors who sell this product, ordered by reliability score
+      const vendors = await prisma.$queryRaw`
+        SELECT 
+          v.id as vendor_id,
+          v.vendor_code,
+          u.name as vendor_name,
+          u.business_name,
+          u.city,
+          u.phone_number,
+          v.rating as vendor_rating,
+          v.commission_rate,
+          
+          -- Vendor product details
+          vp.id as vendor_product_id,
+          vp.sku,
+          vp.vendor_price,
+          vp.mrp,
+          vp.discount,
+          vp.stock,
+          vp.is_available,
+          vp.lead_time_days,
+          
+          -- Product details
+          p.name as product_name,
+          p.product_code,
+          p.category,
+          p.unit,
+          
+          -- Vendor inventory (if exists)
+          vi.available_quantity,
+          vi.status as inventory_status,
+          
+          -- Reliability score from VendorRoutingScore
+          COALESCE(vrs.reliability_score, 0) as reliability_score,
+          COALESCE(vrs.overall_score, 0) as overall_score,
+          COALESCE(vrs.availability_score, 0) as availability_score,
+          COALESCE(vrs.price_score, 0) as price_score,
+          COALESCE(vrs.workload_score, 0) as workload_score,
+          vrs.active_orders_count,
+          vrs.pending_orders_count,
+          vrs.average_fulfillment_time,
+          
+          -- Vendor ranking (if exists)
+          vr.vendor_score,
+          vr.acceptance_rate,
+          vr.completion_rate,
+          vr.avg_delivery_time,
+          vr.total_orders,
+          vr.completed_orders,
+          vr.rank
+          
+        FROM vendor_products vp
+        INNER JOIN vendors v ON vp.vendor_id = v.id
+        INNER JOIN users u ON v.user_id = u.id
+        INNER JOIN products p ON vp.product_id = p.id
+        LEFT JOIN vendor_inventories vi ON vi.vendor_id = v.id AND vi.product_id = p.id
+        LEFT JOIN vendor_routing_scores vrs ON vrs.vendor_id = v.id
+        LEFT JOIN vendor_rankings vr ON vr.vendor_id = v.id
+        
+        WHERE vp.product_id = ${productId}::uuid
+        AND vp.is_available = true
+        AND vp.deleted_at IS NULL
+        AND v.is_approved = true
+        AND v.deleted_at IS NULL
+        AND u.is_active = true
+        AND p.is_active = true
+        AND p.deleted_at IS NULL
+        
+        ORDER BY 
+          COALESCE(vrs.reliability_score, 0) DESC,
+          COALESCE(vrs.overall_score, 0) DESC,
+          COALESCE(vr.vendor_score, 0) DESC,
+          vp.vendor_price ASC
+        
+        LIMIT ${limit}
+      `;
+
+      logger.info('✅ Found reliable wholesalers', {
+        productId,
+        count: vendors.length,
+        topVendor: vendors[0]?.vendor_name,
+        topReliabilityScore: vendors[0]?.reliability_score,
+      });
+
+      // Format the results
+      const formattedVendors = vendors.map(vendor => ({
+        vendorId: vendor.vendor_id,
+        vendorCode: vendor.vendor_code,
+        vendorName: vendor.vendor_name,
+        businessName: vendor.business_name,
+        city: vendor.city,
+        phoneNumber: vendor.phone_number,
+        vendorRating: parseFloat(vendor.vendor_rating) || 0,
+        commissionRate: parseFloat(vendor.commission_rate) || 0,
+        
+        // Product offering
+        vendorProductId: vendor.vendor_product_id,
+        sku: vendor.sku,
+        price: parseFloat(vendor.vendor_price),
+        mrp: parseFloat(vendor.mrp),
+        discount: parseFloat(vendor.discount) || 0,
+        stock: vendor.stock,
+        isAvailable: vendor.is_available,
+        leadTimeDays: vendor.lead_time_days,
+        
+        // Product info
+        productName: vendor.product_name,
+        productCode: vendor.product_code,
+        category: vendor.category,
+        unit: vendor.unit,
+        
+        // Inventory
+        availableQuantity: vendor.available_quantity,
+        inventoryStatus: vendor.inventory_status,
+        
+        // Performance scores
+        reliabilityScore: parseFloat(vendor.reliability_score) || 0,
+        overallScore: parseFloat(vendor.overall_score) || 0,
+        availabilityScore: parseFloat(vendor.availability_score) || 0,
+        priceScore: parseFloat(vendor.price_score) || 0,
+        workloadScore: parseFloat(vendor.workload_score) || 0,
+        activeOrdersCount: vendor.active_orders_count || 0,
+        pendingOrdersCount: vendor.pending_orders_count || 0,
+        averageFulfillmentTime: vendor.average_fulfillment_time || 0,
+        
+        // Ranking metrics
+        vendorScore: parseFloat(vendor.vendor_score) || 0,
+        acceptanceRate: parseFloat(vendor.acceptance_rate) || 0,
+        completionRate: parseFloat(vendor.completion_rate) || 0,
+        avgDeliveryTime: parseFloat(vendor.avg_delivery_time) || 0,
+        totalOrders: vendor.total_orders || 0,
+        completedOrders: vendor.completed_orders || 0,
+        rank: vendor.rank || null,
+        
+        // Performance grade
+        performanceGrade: this.calculatePerformanceGrade(parseFloat(vendor.reliability_score) || 0),
+      }));
+
+      return formattedVendors;
+
+    } catch (error) {
+      logger.error('❌ Error getting top reliable wholesalers', {
+        productId,
+        limit,
+        error: error.message,
+        stack: error.stack,
+      });
+      throw error;
+    }
+  }
 }
 
 module.exports = new VendorPerformanceService();

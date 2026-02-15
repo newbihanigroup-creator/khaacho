@@ -1,6 +1,12 @@
 const Queue = require('bull');
 const logger = require('../utils/logger');
 const config = require('../config');
+const {
+  PRODUCTION_JOB_OPTIONS,
+  DEAD_LETTER_QUEUE_CONFIG,
+  setupProductionEventHandlers,
+  getQueueConfig,
+} = require('./productionQueueConfig');
 
 // Redis connection configuration with retry strategy for Render
 const getRedisConfig = () => {
@@ -46,16 +52,8 @@ const getRedisConfig = () => {
   };
 };
 
-// Default job options
-const DEFAULT_JOB_OPTIONS = {
-  attempts: 3,
-  backoff: {
-    type: 'exponential',
-    delay: 2000,
-  },
-  removeOnComplete: 100,
-  removeOnFail: 500,
-};
+// Default job options (production-grade)
+const DEFAULT_JOB_OPTIONS = PRODUCTION_JOB_OPTIONS;
 
 // Queue definitions
 const QUEUES = {
@@ -66,12 +64,14 @@ const QUEUES = {
   REPORT_GENERATION: 'report-generation',
   EMAIL: 'email-notifications',
   ORDER_PROCESSING: 'order-processing',
+  IMAGE_PROCESSING: 'image-processing',
 };
 
 class QueueManager {
   constructor() {
     this.queues = {};
     this.processors = {};
+    this.deadLetterQueue = null;
     this.isInitialized = false;
   }
 
@@ -84,23 +84,42 @@ class QueueManager {
       return;
     }
 
-    logger.info('Initializing queue manager...');
+    logger.info('Initializing queue manager with production configuration...');
 
     try {
       const redisConfig = getRedisConfig();
 
-      // Create all queues
+      // Create dead letter queue first
+      this.deadLetterQueue = new Queue(DEAD_LETTER_QUEUE_CONFIG.name, {
+        ...redisConfig,
+        defaultJobOptions: DEAD_LETTER_QUEUE_CONFIG.jobOptions,
+      });
+      
+      logger.info('Dead letter queue initialized');
+
+      // Create all queues with production config
       Object.entries(QUEUES).forEach(([key, queueName]) => {
         try {
+          const queueConfig = getQueueConfig(queueName);
+          
           this.queues[key] = new Queue(queueName, {
             ...redisConfig,
-            defaultJobOptions: DEFAULT_JOB_OPTIONS,
+            defaultJobOptions: queueConfig.jobOptions,
+            limiter: queueConfig.limiter,
           });
 
-          // Setup event listeners
-          this.setupQueueEvents(this.queues[key], queueName);
+          // Setup production event listeners
+          setupProductionEventHandlers(
+            this.queues[key],
+            queueName,
+            this.deadLetterQueue
+          );
           
-          logger.info(`Queue ${queueName} initialized successfully`);
+          logger.info(`Queue ${queueName} initialized with production config`, {
+            concurrency: queueConfig.concurrency,
+            attempts: queueConfig.jobOptions.attempts,
+            timeout: queueConfig.jobOptions.timeout,
+          });
         } catch (error) {
           logger.error(`Failed to initialize queue ${queueName}`, {
             error: error.message,
@@ -111,7 +130,7 @@ class QueueManager {
       });
 
       this.isInitialized = true;
-      logger.info(`Initialized ${Object.keys(this.queues).length} queues`);
+      logger.info(`Initialized ${Object.keys(this.queues).length} queues with dead letter queue`);
     } catch (error) {
       logger.error('Failed to initialize queue manager', {
         error: error.message,
@@ -180,17 +199,29 @@ class QueueManager {
   }
 
   /**
-   * Register a processor for a queue
+   * Register a processor for a queue with error handling
    */
-  registerProcessor(queueKey, processor, concurrency = 1) {
+  registerProcessor(queueKey, processor, concurrency = null) {
     if (!this.queues[queueKey]) {
       throw new Error(`Queue ${queueKey} not found`);
     }
 
-    this.processors[queueKey] = processor;
-    this.queues[queueKey].process(concurrency, processor);
+    const queueName = this.queues[queueKey].name;
+    const queueConfig = getQueueConfig(queueName);
+    const finalConcurrency = concurrency || queueConfig.concurrency;
 
-    logger.info(`Registered processor for queue ${queueKey} with concurrency ${concurrency}`);
+    // Wrap processor with error handling
+    const { withErrorHandling } = require('./productionQueueConfig');
+    const wrappedProcessor = withErrorHandling(processor, queueName);
+
+    this.processors[queueKey] = wrappedProcessor;
+    this.queues[queueKey].process(finalConcurrency, wrappedProcessor);
+
+    logger.info(`Registered processor for queue ${queueKey}`, {
+      concurrency: finalConcurrency,
+      attempts: queueConfig.jobOptions.attempts,
+      timeout: queueConfig.jobOptions.timeout,
+    });
   }
 
   /**
@@ -349,15 +380,66 @@ class QueueManager {
   }
 
   /**
+   * Get failed jobs from dead letter queue
+   */
+  async getDeadLetterJobs(start = 0, end = 10) {
+    if (!this.deadLetterQueue) {
+      throw new Error('Dead letter queue not initialized');
+    }
+
+    return await this.deadLetterQueue.getJobs(['completed', 'waiting', 'active'], start, end);
+  }
+
+  /**
+   * Retry a job from dead letter queue
+   */
+  async retryDeadLetterJob(jobId) {
+    if (!this.deadLetterQueue) {
+      throw new Error('Dead letter queue not initialized');
+    }
+
+    const job = await this.deadLetterQueue.getJob(jobId);
+    if (!job) {
+      throw new Error(`Job ${jobId} not found in dead letter queue`);
+    }
+
+    const { originalQueue, originalJobName, originalData } = job.data;
+    
+    // Find the original queue
+    const queueKey = Object.keys(QUEUES).find(key => QUEUES[key] === originalQueue);
+    if (!queueKey) {
+      throw new Error(`Original queue ${originalQueue} not found`);
+    }
+
+    // Re-add job to original queue
+    const newJob = await this.addJob(queueKey, originalJobName, originalData);
+    
+    // Remove from dead letter queue
+    await job.remove();
+    
+    logger.info(`Retried job from dead letter queue`, {
+      originalJobId: jobId,
+      newJobId: newJob.id,
+      queue: originalQueue,
+    });
+
+    return newJob;
+  }
+
+  /**
    * Close all queues
    */
   async closeAll() {
     logger.info('Closing all queues...');
 
-    const closePromises = Object.values(this.queues).map(queue => queue.close());
+    const closePromises = [
+      ...Object.values(this.queues).map(queue => queue.close()),
+      this.deadLetterQueue ? this.deadLetterQueue.close() : Promise.resolve(),
+    ];
+    
     await Promise.all(closePromises);
 
-    logger.info('All queues closed');
+    logger.info('All queues closed (including dead letter queue)');
   }
 }
 
