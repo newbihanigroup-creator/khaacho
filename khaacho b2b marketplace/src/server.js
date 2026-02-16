@@ -36,6 +36,7 @@ const createHealthRoutes = require('./api/routes/health.routes');
 // ============================================================================
 
 const prisma = require('./config/database');
+const { initializeRedis, pingRedis, isRedisConnected } = require('./config/redis');
 
 async function testDatabaseConnection() {
   try {
@@ -57,10 +58,42 @@ async function testDatabaseConnection() {
   }
 }
 
-// Test database connection before proceeding
-testDatabaseConnection().then(() => {
-  logger.info('Startup checks passed, initializing application...');
-  startServer();
+async function testRedisConnection() {
+  try {
+    logger.info('Testing Redis connection...');
+    const redisClient = await initializeRedis();
+    
+    if (!redisClient) {
+      logger.warn('⚠️  Redis not configured - continuing without Redis');
+      logger.warn('⚠️  Background jobs and caching will be disabled');
+      return false;
+    }
+    
+    const pingSuccess = await pingRedis();
+    if (pingSuccess) {
+      logger.info('✅ Redis connection successful');
+      return true;
+    } else {
+      logger.warn('⚠️  Redis ping failed - continuing without Redis');
+      return false;
+    }
+  } catch (error) {
+    logger.error('⚠️  Redis connection failed', { error: error.message });
+    logger.warn('⚠️  Continuing without Redis - background jobs disabled');
+    return false;
+  }
+}
+
+// Test connections before proceeding
+Promise.all([
+  testDatabaseConnection(),
+  testRedisConnection(),
+]).then(([dbSuccess, redisSuccess]) => {
+  logger.info('Startup checks completed', {
+    database: dbSuccess ? 'connected' : 'failed',
+    redis: redisSuccess ? 'connected' : 'not available',
+  });
+  startServer(redisSuccess);
 }).catch((error) => {
   logger.error('Startup checks failed', { error: error.message });
   process.exit(1);
@@ -70,7 +103,7 @@ testDatabaseConnection().then(() => {
 // SERVER INITIALIZATION
 // ============================================================================
 
-function startServer() {
+function startServer(redisAvailable) {
 const app = express();
 
 // ============================================================================
@@ -233,38 +266,51 @@ app.listen(PORT, () => {
   logger.info(`Environment: ${config.env}`);
   logger.info(`Admin panel: http://localhost:${PORT}/admin`);
 
-  // Initialize job queues
-  try {
-    initializeQueues();
-    logger.info('Job queue system initialized');
-  } catch (error) {
-    logger.error('Failed to initialize job queues', { error: error.message });
+  // Initialize job queues only if Redis is available
+  if (redisAvailable) {
+    try {
+      initializeQueues();
+      logger.info('Job queue system initialized');
+    } catch (error) {
+      logger.error('Failed to initialize job queues', { error: error.message });
+      logger.warn('Continuing without background job queues');
+    }
+
+    // Start workers only if Redis is available
+    try {
+      // Start credit score worker
+      const creditScoreWorker = require('./workers/creditScore.worker');
+      creditScoreWorker.start();
+      logger.info('Credit score worker initialized');
+
+      // Start risk control worker
+      const riskControlWorker = require('./workers/riskControl.worker');
+      riskControlWorker.start();
+      logger.info('Risk control worker initialized');
+
+      // Start order routing worker
+      const orderRoutingWorker = require('./workers/orderRouting.worker');
+      orderRoutingWorker.start();
+      logger.info('Order routing worker initialized');
+
+      // Start vendor performance worker
+      const vendorPerformanceWorker = require('./workers/vendorPerformance.worker');
+      vendorPerformanceWorker.start();
+      logger.info('Vendor performance worker initialized');
+
+      // Start price intelligence worker
+      const priceIntelligenceWorker = require('./workers/priceIntelligence.worker');
+      priceIntelligenceWorker.start();
+      logger.info('Price intelligence worker initialized');
+    } catch (error) {
+      logger.error('Failed to start workers', { error: error.message });
+      logger.warn('Some background workers may not be running');
+    }
+  } else {
+    logger.warn('⚠️  Redis not available - background jobs and workers disabled');
+    logger.warn('⚠️  Server running in synchronous mode');
+    logger.warn('⚠️  Some features may be limited');
   }
-
-  // Start credit score worker
-  const creditScoreWorker = require('./workers/creditScore.worker');
-  creditScoreWorker.start();
-  logger.info('Credit score worker initialized');
-
-  // Start risk control worker
-  const riskControlWorker = require('./workers/riskControl.worker');
-  riskControlWorker.start();
-  logger.info('Risk control worker initialized');
-
-  // Start order routing worker
-  const orderRoutingWorker = require('./workers/orderRouting.worker');
-  orderRoutingWorker.start();
-  logger.info('Order routing worker initialized');
-
-  // Start vendor performance worker
-  const vendorPerformanceWorker = require('./workers/vendorPerformance.worker');
-  vendorPerformanceWorker.start();
-  logger.info('Vendor performance worker initialized');
-
-  // Start price intelligence worker
-  const priceIntelligenceWorker = require('./workers/priceIntelligence.worker');
-  priceIntelligenceWorker.start();
-  logger.info('Price intelligence worker initialized');
 
   // Start recovery worker (CRITICAL for crash recovery)
   const recoveryWorker = require('./workers/recovery.worker');
