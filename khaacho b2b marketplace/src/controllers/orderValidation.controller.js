@@ -1,6 +1,6 @@
 const orderValidationService = require('../services/orderValidation.service');
 const logger = require('../shared/logger');
-const { asyncHandler } = require('../shared/utils/asyncHandler');
+const asyncHandler = require('../shared/utils/asyncHandler');
 const ApiResponse = require('../shared/utils/ApiResponse');
 const Decimal = require('decimal.js');
 
