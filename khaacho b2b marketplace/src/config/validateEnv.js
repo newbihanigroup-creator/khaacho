@@ -1,536 +1,391 @@
 /**
- * Startup Environment Validation
- * Validates required environment variables before server starts
+ * Production-Safe Environment Validation
  * 
- * Production-safe: Exits with code 1 if validation fails
- * Development-friendly: Warns but continues for optional services
- * 
- * Schema-based validation with clear error messages
+ * Single entry point: validateOrExit()
+ * No nested structures, no unsafe destructuring
+ * Guaranteed safe failure behavior
  */
 
 const isProduction = process.env.NODE_ENV === 'production';
+const isDebug = process.env.DEBUG === 'true';
+
+// ============================================================================
+// LAYER 1: SCHEMA DEFINITION
+// ============================================================================
 
 /**
- * Environment variable schema
- * Defines validation rules for all environment variables
+ * Required environment variables
+ * Add new variables here as needed
  */
-const ENV_SCHEMA = {
-  // Critical - Always required
-  DATABASE_URL: {
-    required: true,
-    type: 'string',
-    pattern: /^postgresql:\/\/.+/,
-    description: 'PostgreSQL connection string',
-    example: 'postgresql://user:password@host:5432/database',
-    errorMessage: 'Must be a valid PostgreSQL connection string starting with postgresql://',
-  },
+const REQUIRED_ENV = [
+  'DATABASE_URL',
+  'JWT_SECRET',
+];
 
-  JWT_SECRET: {
-    required: true,
-    type: 'string',
-    minLength: 32,
-    description: 'JWT secret key',
-    example: 'your-super-secret-jwt-key-min-32-characters',
-    errorMessage: 'Must be at least 32 characters long for security',
-  },
+/**
+ * Optional environment variables (warnings only)
+ */
+const OPTIONAL_ENV = [
+  'REDIS_URL',
+  'TWILIO_ACCOUNT_SID',
+  'TWILIO_AUTH_TOKEN',
+  'OPENAI_API_KEY',
+  'GOOGLE_APPLICATION_CREDENTIALS',
+];
 
-  // Redis - Required in production, optional in development
-  REDIS_URL: {
-    required: false,
-    requiredInProduction: true,
-    type: 'string',
-    customValidator: 'validateRedisURL',
-    description: 'Redis connection string',
-    example: 'redis://localhost:6379 or redis://user:pass@host:6379',
-    errorMessage: 'Must be a valid Redis URL (redis:// or rediss://)',
-  },
-
-  // Optional services
-  TWILIO_ACCOUNT_SID: {
-    required: false,
-    type: 'string',
-    pattern: /^AC[a-z0-9]{32}$/i,
-    description: 'Twilio Account SID',
-    example: 'ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx',
-  },
-
-  TWILIO_AUTH_TOKEN: {
-    required: false,
-    type: 'string',
-    minLength: 32,
-    description: 'Twilio Auth Token',
-    example: 'your_twilio_auth_token',
-  },
-
-  OPENAI_API_KEY: {
-    required: false,
-    type: 'string',
-    pattern: /^sk-[a-zA-Z0-9-_]{20,}$/,
-    description: 'OpenAI API Key',
-    example: 'sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx',
-  },
-
-  GOOGLE_APPLICATION_CREDENTIALS: {
-    required: false,
-    type: 'string',
-    description: 'Google Cloud credentials file path',
-    example: './path/to/service-account-key.json',
-  },
-
-  // Server configuration
-  NODE_ENV: {
-    required: false,
-    type: 'string',
-    allowedValues: ['development', 'production', 'test'],
-    default: 'development',
-    description: 'Application environment',
-  },
-
-  PORT: {
-    required: false,
-    type: 'number',
-    default: 3000,
-    description: 'Server port',
-  },
+/**
+ * Environment variables with default values
+ */
+const ENV_DEFAULTS = {
+  NODE_ENV: 'development',
+  PORT: '3000',
 };
 
 /**
- * Validate Redis URL format
- * Supports multiple Redis URL formats:
- * - redis://localhost:6379
- * - redis://username:password@host:6379
- * - redis://:password@host:6379/0
- * - rediss://host:6379 (TLS)
- * - redis://host:6379?family=4
- * 
- * @param {string} url - Redis URL to validate
- * @returns {Object} Validation result with detailed error info
+ * Validation rules for specific variables
  */
-function validateRedisURL(url) {
-  if (!url || typeof url !== 'string') {
-    return {
-      valid: false,
-      error: 'REDIS_URL is empty or not a string',
-    };
+const VALIDATION_RULES = {
+  DATABASE_URL: {
+    pattern: /^postgresql:\/\/.+/,
+    message: 'Must be a valid PostgreSQL connection string (postgresql://...)',
+  },
+  REDIS_URL: {
+    pattern: /^rediss?:\/\/.+/,
+    message: 'Must be a valid Redis connection string (redis:// or rediss://)',
+  },
+  JWT_SECRET: {
+    minLength: 32,
+    message: 'Must be at least 32 characters for security',
+  },
+  TWILIO_ACCOUNT_SID: {
+    pattern: /^AC[a-z0-9]{32}$/i,
+    message: 'Must be a valid Twilio Account SID (AC...)',
+  },
+  TWILIO_AUTH_TOKEN: {
+    minLength: 32,
+    message: 'Must be at least 32 characters',
+  },
+  OPENAI_API_KEY: {
+    pattern: /^sk-[a-zA-Z0-9-_]{20,}$/,
+    message: 'Must be a valid OpenAI API key (sk-...)',
+  },
+  NODE_ENV: {
+    allowedValues: ['development', 'production', 'test'],
+    message: 'Must be one of: development, production, test',
+  },
+  PORT: {
+    pattern: /^\d+$/,
+    message: 'Must be a valid port number',
+  },
+};
+
+// ============================================================================
+// LAYER 2: VALIDATION FUNCTIONS
+// ============================================================================
+
+/**
+ * Validate a single environment variable
+ * 
+ * @param {string} key - Variable name
+ * @param {string|undefined} value - Variable value
+ * @returns {Object} Validation result { valid: boolean, error: string|null }
+ */
+function validateVariable(key, value) {
+  // Check if value exists
+  if (!value || value.trim() === '') {
+    return { valid: false, error: 'Missing or empty' };
   }
 
-  // Trim whitespace
-  url = url.trim();
-
-  // Check for valid Redis protocol
-  const protocolMatch = url.match(/^(redis|rediss):\/\//);
-  if (!protocolMatch) {
-    return {
-      valid: false,
-      error: 'Invalid REDIS_URL format',
-      details: 'Must start with redis:// or rediss://',
-      received: url.substring(0, 30) + (url.length > 30 ? '...' : ''),
-      expected: 'redis://host:port or rediss://host:port',
-    };
+  // Get validation rules for this variable
+  const rules = VALIDATION_RULES[key];
+  if (!rules) {
+    // No specific rules, just check it exists
+    return { valid: true, error: null };
   }
 
-  // Extract components after protocol
-  const afterProtocol = url.substring(protocolMatch[0].length);
-  
-  // Check if there's content after protocol
-  if (!afterProtocol || afterProtocol.length === 0) {
-    return {
-      valid: false,
-      error: 'Incomplete REDIS_URL',
-      details: 'Missing host and port after protocol',
-      example: 'redis://localhost:6379',
-    };
+  // Validate pattern
+  if (rules.pattern) {
+    if (!rules.pattern.test(value)) {
+      return { valid: false, error: rules.message || 'Invalid format' };
+    }
   }
 
-  // Validate basic structure
-  // Formats: host:port, username:password@host:port, :password@host:port, host
-  const validStructure = /^([^@]+@)?[^:@\/\s]+(:\d+)?(\/\d+)?(\?.*)?$/;
-  if (!validStructure.test(afterProtocol)) {
-    return {
-      valid: false,
-      error: 'Invalid REDIS_URL structure',
-      details: 'URL format is malformed',
-      expected: 'redis://[username:password@]host[:port][/db][?options]',
-    };
+  // Validate minimum length
+  if (rules.minLength) {
+    if (value.length < rules.minLength) {
+      return { valid: false, error: rules.message || `Must be at least ${rules.minLength} characters` };
+    }
   }
 
-  // Check for common mistakes
-  if (url.includes(' ')) {
-    return {
-      valid: false,
-      error: 'Invalid REDIS_URL',
-      details: 'URL contains spaces',
-    };
+  // Validate allowed values
+  if (rules.allowedValues) {
+    if (!rules.allowedValues.includes(value)) {
+      return { valid: false, error: rules.message || `Must be one of: ${rules.allowedValues.join(', ')}` };
+    }
   }
 
-  // Warn about localhost in production
-  if (url.includes('//localhost') && isProduction) {
-    return {
-      valid: true,
-      warning: 'Using localhost in production - ensure Redis is on same host',
-    };
-  }
-
-  return { valid: true };
+  return { valid: true, error: null };
 }
 
 /**
- * Validate a single environment variable against schema
+ * Apply default values for missing environment variables
  * 
- * @param {string} key - Environment variable name
- * @param {Object} schema - Validation schema
- * @returns {Object} Validation result
+ * @returns {void}
  */
-function validateVariable(key, schema) {
-  const value = process.env[key];
-  const isRequired = schema.required || (isProduction && schema.requiredInProduction);
-  
-  // Check if variable exists
-  if (!value) {
-    // Use default if provided
-    if (schema.default !== undefined) {
-      process.env[key] = String(schema.default);
-      return {
-        valid: true,
-        name: key,
-        description: schema.description,
-        usedDefault: true,
-        defaultValue: schema.default,
-      };
+function applyDefaults() {
+  for (const key in ENV_DEFAULTS) {
+    if (!process.env[key]) {
+      process.env[key] = ENV_DEFAULTS[key];
     }
+  }
+}
 
-    return {
-      valid: !isRequired,
-      missing: isRequired,
-      name: key,
-      description: schema.description,
-      optional: !isRequired,
-      severity: isRequired ? 'error' : 'warning',
-      example: schema.example,
-    };
-  }
-  
-  // Custom validator
-  if (schema.customValidator) {
-    const validator = schema.customValidator === 'validateRedisURL' 
-      ? validateRedisURL 
-      : null;
+/**
+ * Validate all environment variables
+ * 
+ * @returns {Object} Flat validation result { valid: boolean, missing: string[], invalid: string[], warnings: string[] }
+ */
+function validateEnvironment() {
+  // Apply defaults first
+  applyDefaults();
+
+  const missing = [];
+  const invalid = [];
+  const warnings = [];
+  const validVars = [];
+
+  // Validate required variables
+  for (const key of REQUIRED_ENV) {
+    const value = process.env[key];
     
-    if (validator) {
-      const customResult = validator(value);
-      
-      if (!customResult.valid) {
-        return {
-          valid: false,
-          invalid: true,
-          name: key,
-          description: schema.description,
-          error: customResult.error,
-          details: customResult.details,
-          example: schema.example,
-          received: customResult.received,
-          expected: customResult.expected,
-          severity: 'error',
-        };
-      }
-      
-      if (customResult.warning) {
-        return {
-          valid: true,
-          name: key,
-          description: schema.description,
-          warning: customResult.warning,
-          severity: 'warning',
-        };
+    if (!value || value.trim() === '') {
+      missing.push(key);
+    } else {
+      const result = validateVariable(key, value);
+      if (result.valid) {
+        validVars.push(key);
+      } else {
+        invalid.push(`${key}: ${result.error}`);
       }
     }
   }
-  
-  // Type validation
-  if (schema.type === 'number') {
-    if (isNaN(Number(value))) {
-      return {
-        valid: false,
-        invalid: true,
-        name: key,
-        description: schema.description,
-        error: 'Invalid type',
-        details: `Expected number, got: ${typeof value}`,
-        severity: 'error',
-      };
+
+  // Check optional variables (warnings only)
+  for (const key of OPTIONAL_ENV) {
+    const value = process.env[key];
+    
+    if (!value || value.trim() === '') {
+      // Only warn about Redis in production
+      if (key === 'REDIS_URL' && isProduction) {
+        warnings.push(`${key} not configured - background jobs will be disabled`);
+      }
+    } else {
+      const result = validateVariable(key, value);
+      if (result.valid) {
+        validVars.push(key);
+      } else {
+        // Optional variables with invalid format are warnings, not errors
+        warnings.push(`${key}: ${result.error}`);
+      }
     }
   }
-  
-  // Pattern validation
-  if (schema.pattern && !schema.pattern.test(value)) {
-    return {
-      valid: false,
-      invalid: true,
-      name: key,
-      description: schema.description,
-      error: schema.errorMessage || 'Invalid format',
-      example: schema.example,
-      severity: 'error',
-    };
+
+  // Check for defaults used
+  for (const key in ENV_DEFAULTS) {
+    if (process.env[key] === ENV_DEFAULTS[key]) {
+      warnings.push(`${key} using default value: ${ENV_DEFAULTS[key]}`);
+    }
   }
-  
-  // Allowed values validation
-  if (schema.allowedValues && !schema.allowedValues.includes(value)) {
-    return {
-      valid: false,
-      invalid: true,
-      name: key,
-      description: schema.description,
-      error: 'Invalid value',
-      details: `Must be one of: ${schema.allowedValues.join(', ')}`,
-      received: value,
-      severity: 'error',
-    };
-  }
-  
-  // Length validation
-  if (schema.minLength && value.length < schema.minLength) {
-    return {
-      valid: false,
-      invalid: true,
-      name: key,
-      description: schema.description,
-      error: schema.errorMessage || `Must be at least ${schema.minLength} characters`,
-      severity: 'error',
-    };
-  }
-  
+
   return {
-    valid: true,
-    name: key,
-    description: schema.description,
+    valid: missing.length === 0 && invalid.length === 0,
+    missing: missing,
+    invalid: invalid,
+    warnings: warnings,
+    validVars: validVars,
   };
 }
 
+// ============================================================================
+// LAYER 3: OUTPUT FORMATTING
+// ============================================================================
+
 /**
- * Validate all environment variables against schema
+ * Print validation results in a structured format
  * 
- * @returns {Object} Validation results
+ * @param {Object} result - Validation result
+ * @returns {void}
  */
-function validateEnvironment() {
+function printValidationResults(result) {
   const envName = isProduction ? 'PRODUCTION' : 'DEVELOPMENT';
   
   console.log('\n' + '='.repeat(70));
   console.log(`STARTUP ENVIRONMENT VALIDATION (${envName})`);
   console.log('='.repeat(70) + '\n');
-  
-  const results = {
-    valid: [],
-    missing: [],
-    invalid: [],
-    warnings: [],
-    defaults: [],
-  };
-  
-  // Validate each variable in schema
-  for (const [key, schema] of Object.entries(ENV_SCHEMA)) {
-    const result = validateVariable(key, schema);
-    
-    if (result.valid) {
-      results.valid.push(result);
-      
-      if (result.usedDefault) {
-        results.defaults.push(result);
-      }
-      
-      if (result.warning) {
-        results.warnings.push({
-          name: result.name,
-          message: result.warning,
-        });
-      }
-    } else if (result.missing) {
-      if (result.severity === 'error') {
-        results.missing.push(result);
-      } else {
-        results.warnings.push({
-          name: result.name,
-          message: `${result.description} not configured (optional in ${envName.toLowerCase()})`,
-          example: result.example,
-        });
-      }
-    } else if (result.invalid) {
-      results.invalid.push(result);
-    }
-  }
-  
-  // Display results
-  displayResults(results);
-  
-  // Check if validation passed (only errors block startup)
-  const hasErrors = results.missing.length > 0 || results.invalid.length > 0;
-  
-  return {
-    success: !hasErrors,
-    results,
-  };
-}
 
-/**
- * Display validation results with clear formatting
- * 
- * @param {Object} results - Validation results
- */
-function displayResults(results) {
-  // Display valid variables
-  if (results.valid.length > 0) {
-    console.log('✅ Configured and Valid:');
-    for (const item of results.valid) {
-      console.log(`   ✅ ${item.name}`);
+  // Valid variables
+  if (result.validVars && result.validVars.length > 0) {
+    console.log('✅ Valid Variables:');
+    for (const varName of result.validVars) {
+      console.log(`   ✅ ${varName}`);
     }
     console.log();
   }
 
-  // Display defaults used
-  if (results.defaults && results.defaults.length > 0) {
-    console.log('ℹ️  Using Default Values:');
-    for (const item of results.defaults) {
-      console.log(`   ℹ️  ${item.name} = ${item.defaultValue}`);
-    }
-    console.log();
-  }
-  
-  // Display warnings (non-blocking)
-  if (results.warnings.length > 0) {
+  // Warnings (non-blocking)
+  if (result.warnings && result.warnings.length > 0) {
     console.log('⚠️  Warnings (non-blocking):');
-    for (const item of results.warnings) {
-      console.log(`   ⚠️  ${item.name}: ${item.message}`);
-      if (item.example) {
-        console.log(`      Example: ${item.example}`);
-      }
+    for (const warning of result.warnings) {
+      console.log(`   ⚠️  ${warning}`);
     }
     console.log();
   }
-  
-  // Display missing required variables (blocking)
-  if (results.missing.length > 0) {
+
+  // Missing variables (blocking)
+  if (result.missing && result.missing.length > 0) {
     console.log('❌ Missing Required Variables:');
-    for (const item of results.missing) {
-      console.log(`   ❌ ${item.name} - ${item.description}`);
-      if (item.example) {
-        console.log(`      Example: ${item.example}`);
+    for (const varName of result.missing) {
+      console.log(`   ❌ ${varName}`);
+      
+      // Show example if available
+      const rules = VALIDATION_RULES[varName];
+      if (rules && rules.message) {
+        console.log(`      ${rules.message}`);
       }
     }
     console.log();
   }
-  
-  // Display invalid variables (blocking)
-  if (results.invalid.length > 0) {
+
+  // Invalid variables (blocking)
+  if (result.invalid && result.invalid.length > 0) {
     console.log('❌ Invalid Variables:');
-    for (const item of results.invalid) {
-      console.log(`   ❌ ${item.name} - ${item.error}`);
-      if (item.details) {
-        console.log(`      Details: ${item.details}`);
-      }
-      if (item.received) {
-        console.log(`      Received: ${item.received}`);
-      }
-      if (item.expected) {
-        console.log(`      Expected: ${item.expected}`);
-      }
-      if (item.example) {
-        console.log(`      Example: ${item.example}`);
-      }
+    for (const error of result.invalid) {
+      console.log(`   ❌ ${error}`);
     }
     console.log();
   }
 }
 
 /**
- * Run validation and exit if failed
- * Call this before starting the Express server
+ * Print diagnostic information
  * 
- * Behavior:
- * - Development: Warns about missing optional services, continues startup
- * - Production: Fails if required services (like Redis) are missing/invalid
- * - Only DATABASE_URL failure causes immediate exit
- * - Redis failures are logged but don't crash the server
+ * @returns {void}
+ */
+function printDiagnostics() {
+  console.log('🔍 Diagnostic Information:');
+  console.log(`   Environment: ${isProduction ? 'PRODUCTION' : 'DEVELOPMENT'}`);
+  console.log(`   Node Version: ${process.version}`);
+  console.log(`   Platform: ${process.platform}`);
+  console.log();
+}
+
+/**
+ * Print action required message
+ * 
+ * @returns {void}
+ */
+function printActionRequired() {
+  console.log('📋 Action Required:');
+  console.log('   1. Check your .env file or environment variables');
+  console.log('   2. Compare with .env.example for reference');
+  console.log('   3. Ensure all required variables are set correctly');
+  console.log();
+  console.log('💡 Common Issues:');
+  console.log('   - REDIS_URL must be redis://host:port (not redis-cli command)');
+  console.log('   - DATABASE_URL must start with postgresql://');
+  console.log('   - JWT_SECRET must be at least 32 characters');
+  console.log();
+}
+
+// ============================================================================
+// LAYER 4: EXIT CONTROLLER
+// ============================================================================
+
+/**
+ * Main validation entry point
+ * Validates environment and exits if invalid
+ * 
+ * This is the ONLY exported function
+ * 
+ * @returns {void} Never returns if validation fails (calls process.exit)
  */
 function validateOrExit() {
-  const { success, results } = validateEnvironment();
-  
-  if (!success) {
-    console.log('='.repeat(70));
-    console.log('❌ STARTUP VALIDATION FAILED');
-    console.log('='.repeat(70));
-    console.log('\n🔍 Diagnostic Information:');
-    console.log(`   Environment: ${isProduction ? 'PRODUCTION' : 'DEVELOPMENT'}`);
-    console.log(`   Node Version: ${process.version}`);
-    console.log(`   Platform: ${process.platform}`);
-    console.log('\n📋 Action Required:');
-    console.log('   1. Check your .env file or environment variables');
-    console.log('   2. Compare with .env.example for reference');
-    console.log('   3. Ensure all required variables are set correctly');
+  try {
+    // Run validation
+    const result = validateEnvironment();
     
-    // Check if DATABASE_URL is missing (critical)
-    const dbMissing = results.results.missing.some(item => item.name === 'DATABASE_URL');
-    const dbInvalid = results.results.invalid.some(item => item.name === 'DATABASE_URL');
-    
-    if (dbMissing || dbInvalid) {
-      console.log('\n🚨 CRITICAL: DATABASE_URL is required for server to start');
-      console.log('   The application cannot function without a database connection.');
-      console.log('   Example: postgresql://user:password@host:5432/database\n');
+    // Safe access with defaults
+    const valid = result?.valid ?? false;
+    const missing = result?.missing ?? [];
+    const invalid = result?.invalid ?? [];
+    const warnings = result?.warnings ?? [];
+
+    // Print results
+    printValidationResults(result);
+
+    // Check if validation passed
+    if (!valid) {
+      console.log('='.repeat(70));
+      console.log('❌ STARTUP VALIDATION FAILED');
+      console.log('='.repeat(70));
+      console.log();
+      
+      printDiagnostics();
+      printActionRequired();
+
+      // Show debug info if enabled
+      if (isDebug) {
+        console.log('🐛 Debug Information:');
+        console.log('   Missing:', missing);
+        console.log('   Invalid:', invalid);
+        console.log('   Warnings:', warnings);
+        console.log();
+      }
+
+      // Exit safely
       process.exit(1);
     }
+
+    // Success
+    console.log('='.repeat(70));
+    console.log('✅ STARTUP VALIDATION PASSED');
+    console.log('='.repeat(70));
+    console.log();
+    console.log(`📊 Summary: ${result.validVars.length} valid, ${warnings.length} warnings`);
+    console.log();
+
+  } catch (error) {
+    // Catch any unexpected errors during validation
+    console.error('\n' + '='.repeat(70));
+    console.error('💥 CRITICAL ERROR DURING VALIDATION');
+    console.error('='.repeat(70));
+    console.error('\nAn unexpected error occurred during environment validation.');
+    console.error('This should never happen. Please report this issue.');
+    console.error();
     
-    // Check if Redis is the only issue
-    const onlyRedisIssue = results.results.missing.every(item => item.name === 'REDIS_URL') &&
-                           results.results.invalid.every(item => item.name === 'REDIS_URL');
-    
-    if (onlyRedisIssue && isProduction) {
-      console.log('\n⚠️  Redis Configuration Issue:');
-      console.log('   Redis is required in production for background jobs and caching.');
-      console.log('   However, the server will attempt to start without Redis.');
-      console.log('   Some features may be disabled.\n');
-      console.log('🔧 Common Redis URL Formats:');
-      console.log('   redis://localhost:6379');
-      console.log('   redis://username:password@host:6379');
-      console.log('   redis://:password@host:6379/0');
-      console.log('   rediss://host:6379 (TLS)\n');
-      console.log('💡 Tip: Fix Redis configuration and restart for full functionality.\n');
-      
-      // Don't exit - continue without Redis
-      console.log('='.repeat(70));
-      console.log('⚠️  CONTINUING WITH WARNINGS');
-      console.log('='.repeat(70) + '\n');
-      return true;
+    if (isDebug) {
+      console.error('Error details:', error);
+      console.error('Stack trace:', error.stack);
+    } else {
+      console.error('Error:', error.message);
+      console.error('Run with DEBUG=true for more details');
     }
     
-    if (results.results.invalid.length > 0) {
-      console.log('\n🔧 Common Redis URL Formats:');
-      console.log('   redis://localhost:6379');
-      console.log('   redis://username:password@host:6379');
-      console.log('   redis://:password@host:6379/0');
-      console.log('   rediss://host:6379 (TLS)');
-    }
+    console.error();
     
-    console.log('\n💡 Tip: In development, Redis is optional. Set NODE_ENV=development');
-    console.log('    In production, Redis is recommended for job queues and caching.\n');
-    
-    // Exit with code 1 for critical failures
+    // Exit safely even on unexpected errors
     process.exit(1);
   }
-  
-  console.log('='.repeat(70));
-  console.log('✅ STARTUP VALIDATION PASSED');
-  console.log('='.repeat(70));
-  
-  // Log summary
-  const { valid, warnings, defaults } = results.results;
-  const defaultCount = defaults ? defaults.length : 0;
-  console.log(`\n📊 Summary: ${valid.length} configured, ${warnings.length} warnings, ${defaultCount} defaults\n`);
-  
-  return true;
 }
 
+// ============================================================================
+// EXPORTS
+// ============================================================================
+
+/**
+ * Export only the main entry point
+ * No other functions should be exported to prevent misuse
+ */
 module.exports = {
-  validateEnvironment,
   validateOrExit,
-  validateRedisURL, // Export for testing
-  ENV_SCHEMA, // Export schema for reference
 };
