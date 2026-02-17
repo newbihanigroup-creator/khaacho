@@ -242,6 +242,85 @@ class OrderRoutingService {
 
     // Find eligible vendors
     const eligibleVendors = await this._findEligibleVendors(items, config);
+
+    if (eligibleVendors.length === 0) {
+      throw new Error('No eligible vendors found for this order');
+    }
+
+    // Score and rank vendors
+    const rankedVendors = await this._scoreAndRankVendors(
+      eligibleVendors,
+      retailer,
+      items,
+      config
+    );
+
+    // Select best vendor
+    const selectedVendor = rankedVendors[0];
+    const fallbackVendor = rankedVendors[1] || null;
+
+    // Calculate acceptance deadline
+    const acceptanceDeadline = new Date();
+    acceptanceDeadline.setHours(
+      acceptanceDeadline.getHours() + (config.acceptance_timeout?.hours || 2)
+    );
+
+    // Log routing decision
+    const routingLog = await prisma.orderRoutingLog.create({
+      data: {
+        orderId,
+        retailerId,
+        routingAttempt: 1,
+        vendorsEvaluated: rankedVendors.map(v => ({
+          vendorId: v.vendorId,
+          vendorCode: v.vendorCode,
+          overallScore: v.overallScore,
+          scores: v.scores,
+          rank: v.rank,
+        })),
+        selectedVendorId: selectedVendor.vendorId,
+        fallbackVendorId: fallbackVendor?.vendorId,
+        routingReason: this._generateRoutingReason(selectedVendor, rankedVendors),
+        routingCriteria: {
+          weights: config.routing_weights,
+          minReliability: config.min_reliability_score,
+        },
+        acceptanceDeadline,
+        isManualOverride: false,
+      },
+    });
+
+    // Create vendor acceptance record
+    await prisma.vendorOrderAcceptance.create({
+      data: {
+        vendorId: selectedVendor.vendorId,
+        orderId,
+        routingLogId: routingLog.id,
+        status: 'PENDING',
+        notifiedAt: new Date(),
+        responseDeadline: acceptanceDeadline,
+      },
+    });
+
+    logger.info('Order routed with standard routing', {
+      orderId,
+      selectedVendor: selectedVendor.vendorCode,
+      score: selectedVendor.overallScore,
+      fallbackVendor: fallbackVendor?.vendorCode,
+    });
+
+    return {
+      selectedVendor: selectedVendor.vendorId,
+      fallbackVendor: fallbackVendor?.vendorId,
+      routingLog,
+      rankedVendors,
+      acceptanceDeadline,
+    };
+  }
+
+  /**
+   * Handle manual vendor routing
+   */
   async _handleManualRouting(orderId, orderData, vendorId, overrideBy, overrideReason) {
     const { retailerId } = orderData;
 
