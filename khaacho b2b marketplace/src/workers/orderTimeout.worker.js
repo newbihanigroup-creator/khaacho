@@ -144,7 +144,3 @@ const worker = new OrderTimeoutWorker();
 
 // Export worker instance and control functions
 module.exports = worker;
-module.exports.start = () => worker.start();
-module.exports.stop = () => worker.stop();
-module.exports.getStats = () => worker.getStats();
-module.exports.triggerManually = () => worker.triggerManually();

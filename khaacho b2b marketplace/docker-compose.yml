@@ -4,29 +4,29 @@ services:
   # PostgreSQL Database
   postgres:
     image: postgres:15-alpine
-    container_name: khaacho-db
-    restart: unless-stopped
+    container_name: khaacho-postgres
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-khaacho}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-khaacho_password}
-      POSTGRES_DB: ${POSTGRES_DB:-khaacho_db}
+      POSTGRES_USER: khaacho
+      POSTGRES_PASSWORD: khaacho_dev_password
+      POSTGRES_DB: khaacho
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      - ./scripts/db-partition.sql:/docker-entrypoint-initdb.d/partition.sql
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-khaacho}"]
+      test: ["CMD-SHELL", "pg_isready -U khaacho"]
       interval: 10s
       timeout: 5s
       retries: 5
 
-  # Redis (for job queues)
+  # Redis Cache & Queue
   redis:
     image: redis:7-alpine
     container_name: khaacho-redis
-    restart: unless-stopped
+    command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy allkeys-lru
     ports:
-      - "${REDIS_PORT:-6379}:6379"
+      - "6379:6379"
     volumes:
       - redis_data:/data
     healthcheck:
@@ -35,46 +35,52 @@ services:
       timeout: 3s
       retries: 5
 
-  # Application (Web Server)
-  app:
+  # API Service
+  api:
     build:
       context: .
-      dockerfile: Dockerfile
-    container_name: khaacho-app
-    restart: unless-stopped
-    ports:
-      - "${PORT:-3000}:3000"
+      dockerfile: docker/Dockerfile.api
+    container_name: khaacho-api
     environment:
-      NODE_ENV: production
-      DATABASE_URL: postgresql://${POSTGRES_USER:-khaacho}:${POSTGRES_PASSWORD:-khaacho_password}@postgres:5432/${POSTGRES_DB:-khaacho_db}
-      REDIS_URL: redis://redis:6379
+      NODE_ENV: development
       PORT: 3000
+      DATABASE_URL: postgresql://khaacho:khaacho_dev_password@postgres:5432/khaacho
+      REDIS_URL: redis://redis:6379
+      JWT_SECRET: dev_jwt_secret_change_in_production
+      LOG_LEVEL: debug
+    ports:
+      - "3000:3000"
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
     volumes:
-      - ./logs:/app/logs
-    command: sh -c "npx prisma migrate deploy && node src/server.js"
+      - ./src-refactored:/app/src-refactored
+      - ./prisma:/app/prisma
+    command: npm run dev:api
 
-  # Worker Process (Background Jobs)
+  # Worker Service
   worker:
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: docker/Dockerfile.worker
     container_name: khaacho-worker
-    restart: unless-stopped
     environment:
-      NODE_ENV: production
-      DATABASE_URL: postgresql://${POSTGRES_USER:-khaacho}:${POSTGRES_PASSWORD:-khaacho_password}@postgres:5432/${POSTGRES_DB:-khaacho_db}
+      NODE_ENV: development
+      DATABASE_URL: postgresql://khaacho:khaacho_dev_password@postgres:5432/khaacho
       REDIS_URL: redis://redis:6379
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      LOG_LEVEL: debug
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
-    command: node src/server-worker.js
+    volumes:
+      - ./src-refactored:/app/src-refactored
+      - ./prisma:/app/prisma
+    command: npm run dev:worker
 
 volumes:
   postgres_data:

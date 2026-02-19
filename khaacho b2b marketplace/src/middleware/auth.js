@@ -37,7 +37,16 @@ const authenticate = async (req, res, next) => {
         email: true,
         role: true,
         isActive: true,
-        isApproved: true,
+        vendorProfile: {
+          select: {
+            isApproved: true,
+          },
+        },
+        retailerProfile: {
+          select: {
+            isApproved: true,
+          },
+        },
         createdAt: true,
       },
     });
@@ -61,7 +70,16 @@ const authenticate = async (req, res, next) => {
     }
 
     // Check if user is approved (for vendors/retailers)
-    if ((user.role === 'VENDOR' || user.role === 'RETAILER') && !user.isApproved) {
+    if (user.role === 'VENDOR' && !user.vendorProfile?.isApproved) {
+      logger.warn('Authentication failed: User not approved', {
+        userId: user.id,
+        role: user.role,
+        ip: req.ip,
+      });
+      throw new AuthenticationError('User account is not approved');
+    }
+
+    if (user.role === 'RETAILER' && !user.retailerProfile?.isApproved) {
       logger.warn('Authentication failed: User not approved', {
         userId: user.id,
         role: user.role,

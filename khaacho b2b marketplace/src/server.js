@@ -1,4 +1,5 @@
 const express = require('express');
+const app = express();
 
 // Fatal Error Handler for Startup
 process.on('uncaughtException', (err) => {
@@ -104,7 +105,6 @@ Promise.all([
 // ============================================================================
 
 function startServer(redisAvailable) {
-const app = express();
 
 // ============================================================================
 // PROXY CONFIGURATION (CRITICAL - Must be set before any middleware)
