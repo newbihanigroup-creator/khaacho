@@ -24,8 +24,10 @@ class CreditService {
     };
   }
 
-  async recordTransaction({ retailerId, vendorId, orderId, transactionType, amount, description, referenceNumber = null }) {
-    const retailer = await prisma.retailer.findUnique({
+  async recordTransaction({ retailerId, vendorId, orderId, transactionType, amount, description, referenceNumber = null }, tx = null) {
+    const dbClient = tx || prisma;
+    
+    const retailer = await dbClient.retailer.findUnique({
       where: { id: retailerId },
     });
 
@@ -44,16 +46,25 @@ class CreditService {
       newBalance = currentBalance;
     }
 
-    const ledgerEntry = await prisma.creditLedger.create({
+    const ledgerEntry = await dbClient.creditLedger.create({
       data: {
         retailerId,
         vendorId,
         orderId,
         transactionType,
         amount,
-        balance: newBalance,
+        runningBalance: newBalance,
+        previousBalance: currentBalance,
         description,
         referenceNumber,
+      },
+    });
+
+    // Update retailer outstanding debt
+    await dbClient.retailer.update({
+      where: { id: retailerId },
+      data: {
+        outstandingDebt: newBalance,
       },
     });
 
