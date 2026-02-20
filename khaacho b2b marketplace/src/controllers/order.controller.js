@@ -2,6 +2,7 @@ const { body, param, query } = require('express-validator');
 const OrderService = require('../services/order.service');
 const WhatsAppService = require('../services/whatsapp.service');
 const ApiResponse = require('../utils/response');
+const IdempotencyMiddleware = require('../middleware/idempotency.middleware');
 
 class OrderController {
   createValidation = [
@@ -17,21 +18,33 @@ class OrderController {
       .withMessage('Invalid status'),
   ];
 
+  // Apply idempotency middleware to createOrder
+  createOrderMiddleware = [
+    IdempotencyMiddleware.requireIdempotencyKey(),
+    IdempotencyMiddleware.checkKey(),
+  ];
+
   async createOrder(req, res, next) {
     try {
       const { vendorId, items, notes } = req.body;
       const retailerId = req.user.retailerProfile?.id;
+      const idempotencyKey = req.idempotencyKey;
 
       if (!retailerId) {
         return ApiResponse.error(res, 'Only retailers can create orders', 403);
       }
 
-      const order = await OrderService.createOrder(retailerId, vendorId, items, notes);
+      const order = await OrderService.createOrder(retailerId, vendorId, items, notes, idempotencyKey);
+
+      // Store response for idempotency middleware
+      req.idempotencyResponse = order;
 
       await WhatsAppService.sendOrderConfirmation(order);
 
       return ApiResponse.success(res, order, 'Order created successfully', 201);
     } catch (error) {
+      // Store error for idempotency middleware
+      req.idempotencyError = error;
       next(error);
     }
   }

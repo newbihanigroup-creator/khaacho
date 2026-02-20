@@ -2,10 +2,34 @@ const prisma = require('../config/database');
 const { NotFoundError, ValidationError } = require('../utils/errors');
 const CreditService = require('./credit.service');
 const monitoringService = require('./monitoring.service');
+const IdempotencyService = require('./idempotency.service');
 const logger = require('../utils/logger');
 
 class OrderService {
-  async createOrder(retailerId, vendorId, items, notes = null) {
+  async createOrder(retailerId, vendorId, items, notes = null, idempotencyKey = null) {
+    // Check idempotency key first
+    if (idempotencyKey) {
+      const keyStatus = await IdempotencyService.checkOrCreateKey(idempotencyKey, retailerId);
+      
+      if (keyStatus.exists && keyStatus.status === 'completed') {
+        logger.info('Returning cached order response', {
+          key: idempotencyKey,
+          retailerId,
+          status: keyStatus.status
+        });
+        return keyStatus.response;
+      }
+
+      if (keyStatus.exists && keyStatus.status === 'processing') {
+        logger.warn('Order creation already in progress', {
+          key: idempotencyKey,
+          retailerId,
+          status: keyStatus.status
+        });
+        throw new ValidationError('Order creation is already in progress');
+      }
+    }
+
     return await prisma.$transaction(async (tx) => {
       try {
         // Validate retailer and vendor
@@ -127,6 +151,11 @@ class OrderService {
           },
         });
 
+        // Mark idempotency key as completed
+        if (idempotencyKey) {
+          await IdempotencyService.markCompleted(idempotencyKey, order);
+        }
+
         // Track order creation for monitoring
         try {
           await monitoringService.trackOrderCreated(order.id, retailerId, vendorId, total);
@@ -140,11 +169,17 @@ class OrderService {
 
         return order;
       } catch (error) {
+        // Mark idempotency key as failed if transaction fails
+        if (idempotencyKey) {
+          await IdempotencyService.markFailed(idempotencyKey, error);
+        }
+
         logger.logError(error, { 
           context: 'order_creation_transaction',
           retailerId,
           vendorId,
-          itemCount: items?.length 
+          itemCount: items?.length,
+          idempotencyKey
         });
         
         // Re-throw to trigger transaction rollback

@@ -844,6 +844,20 @@ model health_alert_thresholds {
   updated_at          DateTime @default(now()) @db.Timestamp(6)
 }
 
+model IdempotencyKey {
+  id        String   @id @default(uuid())
+  key       String   @unique
+  userId    String?
+  status    String   // processing, completed, failed
+  response  Json?
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([key])
+  @@index([userId, status])
+  @@index([createdAt(sort: Desc)])
+  @@map("idempotency_keys")
+}
+
 /// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
 model health_alerts {
   id              String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
