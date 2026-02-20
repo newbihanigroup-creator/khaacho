@@ -3,6 +3,7 @@ const { NotFoundError, ValidationError } = require('../utils/errors');
 const CreditService = require('./credit.service');
 const monitoringService = require('./monitoring.service');
 const IdempotencyService = require('./idempotency.service');
+const OrderAuditService = require('./orderAudit.service');
 const logger = require('../utils/logger');
 
 class OrderService {
@@ -119,6 +120,20 @@ class OrderService {
           },
         });
 
+        // Log order creation audit
+        await OrderAuditService.createAuditLog(
+          order.id,
+          null, // No previous status for new orders
+          'CREATED',
+          retailerId, // Created by retailer
+          {
+            itemCount: items.length,
+            totalAmount: total,
+            vendorId,
+            idempotencyKey
+          }
+        );
+
         // Update product stock
         for (const item of items) {
           await tx.product.update({
@@ -189,34 +204,63 @@ class OrderService {
   }
 
   async updateOrderStatus(orderId, status, userId) {
-    const order = await prisma.order.findUnique({
-      where: { id: orderId },
+    return await prisma.$transaction(async (tx) => {
+      try {
+        const order = await tx.order.findUnique({
+          where: { id: orderId },
+        });
+
+        if (!order) {
+          throw new NotFoundError('Order not found');
+        }
+
+        const previousStatus = order.status;
+
+        const updatedOrder = await tx.order.update({
+          where: { id: orderId },
+          data: {
+            status,
+            deliveredAt: status === 'DELIVERED' ? new Date() : order.deliveredAt,
+          },
+          include: {
+            items: {
+              include: { product: true },
+            },
+            retailer: {
+              include: { user: true },
+            },
+            vendor: {
+              include: { user: true },
+            },
+          },
+        });
+
+        // Log status change audit
+        await OrderAuditService.createAuditLog(
+          orderId,
+          previousStatus,
+          status,
+          userId, // Changed by user who made the request
+          {
+            changedAt: new Date(),
+            previousStatus,
+            newStatus,
+            userId
+          }
+        );
+
+        return updatedOrder;
+      } catch (error) {
+        logger.logError(error, {
+          context: 'order_status_update_transaction',
+          orderId,
+          previousStatus,
+          newStatus,
+          userId
+        });
+        throw error;
+      }
     });
-
-    if (!order) {
-      throw new NotFoundError('Order not found');
-    }
-
-    const updatedOrder = await prisma.order.update({
-      where: { id: orderId },
-      data: {
-        status,
-        deliveredAt: status === 'DELIVERED' ? new Date() : order.deliveredAt,
-      },
-      include: {
-        items: {
-          include: { product: true },
-        },
-        retailer: {
-          include: { user: true },
-        },
-        vendor: {
-          include: { user: true },
-        },
-      },
-    });
-
-    return updatedOrder;
   }
 
   async getOrderById(orderId) {

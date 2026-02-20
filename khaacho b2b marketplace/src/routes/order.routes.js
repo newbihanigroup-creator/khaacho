@@ -17,6 +17,22 @@ router.post('/',
 
 router.get('/', authenticate, OrderController.getOrders.bind(OrderController));
 router.get('/:id', authenticate, OrderController.getOrder.bind(OrderController));
-router.patch('/:id/status', authenticate, authorize('VENDOR', 'ADMIN'), OrderController.updateStatusValidation, validate, OrderController.updateOrderStatus.bind(OrderController));
+
+// Apply idempotency middleware to status update
+router.patch('/:id/status', 
+  authenticate, 
+  authorize('VENDOR', 'ADMIN'), 
+  OrderController.updateStatusValidation, 
+  validate, 
+  ...OrderController.createOrderMiddleware, // Reuse for audit logging
+  OrderController.updateOrderStatus.bind(OrderController)
+);
+
+// New audit history routes
+router.get('/:id/audit-history', 
+  authenticate, 
+  authorize('VENDOR', 'ADMIN'), 
+  OrderController.getOrderAuditHistory.bind(OrderController)
+);
 
 module.exports = router;

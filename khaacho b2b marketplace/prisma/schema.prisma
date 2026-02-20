@@ -844,6 +844,23 @@ model health_alert_thresholds {
   updated_at          DateTime @default(now()) @db.Timestamp(6)
 }
 
+model OrderAuditLog {
+  id            String   @id @default(uuid())
+  orderId       String   @map("order_id")
+  previousStatus String  @map("previous_status")
+  newStatus     String   @map("new_status")
+  changedBy     String?  @map("changed_by")
+  metadata      Json?
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  order Order @relation("OrderAuditLogs", fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId, createdAt(sort: Desc)])
+  @@index([changedBy, createdAt(sort: Desc)])
+  @@index([newStatus, createdAt(sort: Desc)])
+  @@map("order_audit_logs")
+}
+
 model IdempotencyKey {
   id        String   @id @default(uuid())
   key       String   @unique

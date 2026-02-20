@@ -94,6 +94,19 @@ class OrderController {
       next(error);
     }
   }
+
+  async getOrderAuditHistory(req, res, next) {
+    try {
+      const { id } = req.params;
+      const { page = 1, limit = 50 } = req.query;
+
+      const result = await OrderService.getOrderAuditHistory(id, parseInt(page), parseInt(limit));
+
+      return ApiResponse.paginated(res, result.auditLogs, result.pagination, 'Order audit history retrieved');
+    } catch (error) {
+      next(error);
+    }
+  }
 }
 
 module.exports = new OrderController();
